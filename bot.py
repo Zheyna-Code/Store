@@ -56,8 +56,8 @@ EMOJI = {
 }
 
 
-def button(text: str, callback_data: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, callback_data=callback_data)
+def button(text: str, callback_data: str, *, style: str = "primary") -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
 
 
 def premium_button(text: str, callback_data: str, emoji_id: str) -> InlineKeyboardButton:
@@ -65,11 +65,12 @@ def premium_button(text: str, callback_data: str, emoji_id: str) -> InlineKeyboa
         text=text,
         callback_data=callback_data,
         icon_custom_emoji_id=emoji_id,
+        style="primary",
     )
 
 
 def premium_link_button(text: str, url: str, emoji_id: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, url=url, icon_custom_emoji_id=emoji_id)
+    return InlineKeyboardButton(text=text, url=url, icon_custom_emoji_id=emoji_id, style="primary")
 
 
 def premium_emoji(emoji_id: str, fallback: str) -> str:
@@ -91,7 +92,7 @@ def menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def back_keyboard(destination: str = "menu") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", destination)]])
+    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", destination, style="danger")]])
 
 
 def catalog_keyboard() -> InlineKeyboardMarkup:
@@ -102,7 +103,7 @@ def catalog_keyboard() -> InlineKeyboardMarkup:
         [premium_button("Perplexity", "category:perplexity", EMOJI["perplexity"]), premium_button("Netflix", "category:netflix", EMOJI["netflix"])],
         [premium_button("Duolingo", "category:duolingo", EMOJI["duolingo"]), premium_button("CapCut", "category:capcut", EMOJI["capcut"])],
         [premium_button("Spotify", "category:spotify", EMOJI["spotify"])],
-        [button("← Назад", "menu")],
+        [button("← Назад", "menu", style="danger")],
     ])
 
 
@@ -112,7 +113,7 @@ def wallet_keyboard() -> InlineKeyboardMarkup:
         [premium_button(amount, f"wallet_amount:{amount}", EMOJI["dollar"]) for amount in amounts[:3]],
         [premium_button(amount, f"wallet_amount:{amount}", EMOJI["dollar"]) for amount in amounts[3:]],
         [premium_button("Своя сумма", "wallet_custom", EMOJI["write"])],
-        [button("← Назад", "menu")],
+        [button("← Назад", "menu", style="danger")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -126,14 +127,14 @@ def other_keyboard() -> InlineKeyboardMarkup:
     ]
     for text, url in links:
         rows.append([premium_link_button(text, url, EMOJI["link"])] if url else [premium_button(text, "link_not_set", EMOJI["link"])])
-    rows.append([button("← Назад", "menu")])
+    rows.append([button("← Назад", "menu", style="danger")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def support_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [premium_link_button("Написать @DitzzmBack", "https://t.me/DitzzmBack", EMOJI["link"])],
-        [button("← Назад", "menu")],
+        [button("← Назад", "menu", style="danger")],
     ])
 
 
@@ -141,12 +142,12 @@ def payment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [premium_link_button("Crypto Bot", "https://t.me/DitzzmBack", EMOJI["crypto"])],
         [premium_link_button("Оплата через администратора", "https://t.me/DitzzmBack", EMOJI["admin_payment"])],
-        [button("← В меню", "menu")],
+        [button("← В меню", "menu", style="danger")],
     ])
 
 
 def profile_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", "menu")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", "menu", style="danger")]])
 
 
 SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
