@@ -7,8 +7,10 @@
 import asyncio
 import html
 import logging
+import os
 from pathlib import Path
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -347,7 +349,30 @@ async def main() -> None:
     bot = Bot(token=settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
-    await dispatcher.start_polling(bot)
+    health_runner = await start_health_server()
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await health_runner.cleanup()
+
+
+async def health(_: web.Request) -> web.Response:
+    """Проверка состояния для Hostless и будущего Web App."""
+    return web.json_response({"status": "ok", "service": "lavka-strannika-bot"})
+
+
+async def start_health_server() -> web.AppRunner:
+    """Поднимает минимальный HTTP-сервер, не мешая Telegram polling."""
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", "8000"))
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    logging.info("Health server started on port %s", port)
+    return runner
 
 
 if __name__ == "__main__":
