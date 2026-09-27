@@ -264,6 +264,24 @@ async def receive_custom_amount(message: Message, state: FSMContext) -> None:
     await show_payment_options(message, f"${amount:.2f}")
 
 
+@router.message(F.entities)
+async def get_custom_emoji_id(message: Message) -> None:
+    """Возвращает ID premium emoji, присланного владельцем в сообщении."""
+    emoji_ids = [
+        entity.custom_emoji_id
+        for entity in message.entities
+        if entity.type == "custom_emoji" and entity.custom_emoji_id
+    ]
+    if not emoji_ids:
+        return
+    ids_text = "\n".join(f"<code>{emoji_id}</code>" for emoji_id in dict.fromkeys(emoji_ids))
+    await message.answer(
+        "<b>ID premium emoji:</b>\n"
+        f"{ids_text}\n\n"
+        "Скопируйте ID и пришлите его сюда — я добавлю emoji в нужное место меню."
+    )
+
+
 @router.callback_query(F.data == "link_not_set")
 async def link_not_set(callback: CallbackQuery) -> None:
     await callback.answer("Ссылка будет добавлена владельцем магазина.", show_alert=True)
