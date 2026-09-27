@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import html
 import logging
 from pathlib import Path
 
@@ -90,11 +91,36 @@ def support_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def payment_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Crypto Bot — через администратора", url="https://t.me/DitzzmBack")],
+        [InlineKeyboardButton(text="👤 Оплата через администратора", url="https://t.me/DitzzmBack")],
+        [button("← В меню", "menu")],
+    ])
+
+
+def profile_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", "menu")]])
+
+
 SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
-    "menu": ("меню.jpg", "<b>Главное меню</b>\nВыберите нужный раздел.", menu_keyboard()),
+    "menu": (
+        "меню.jpg",
+        "<b>ГЛАВНОЕ МЕНЮ</b>\n\n"
+        "Привет, {first_name}\n\n"
+        "Добро пожаловать в магазин <b>Лавка Странника</b>\n\n"
+        "Здесь ты можешь быстро и удобно купить нужные товары, "
+        "пополнить баланс и посмотреть свои покупки.",
+        menu_keyboard(),
+    ),
     "wallet": ("кошелек.png", "<b>Кошелёк</b>\nПополните баланс на нужную сумму.", wallet_keyboard()),
-    "bonus": ("бонус.jpg", "<b>Бонус</b>\nЗдесь будут ваши бонусы и промокоды.", back_keyboard()),
-    "profile": ("профиль.jpg", "<b>Профиль</b>\nДанные профиля появятся после подключения базы данных.", back_keyboard()),
+    "bonus": (
+        "бонус.jpg",
+        "<b>Бонус</b>\n\n"
+        "Пригласи своего друга и получи награду за его первую покупку "
+        "в размере <b>5%</b> на свой баланс.",
+        back_keyboard(),
+    ),
     "support": ("тех подержка.jpg", "<b>Техподдержка</b>\nОпишите вопрос — вам поможет @DitzzmBack.", support_keyboard()),
     "other": ("прочее.jpg", "<b>Прочее</b>\nДокументы и важная информация.", other_keyboard()),
 }
@@ -112,13 +138,13 @@ CATEGORIES: dict[str, tuple[str | None, str]] = {
 }
 
 
-async def replace_with_screen(message: Message, screen: str) -> None:
+async def replace_with_screen(message: Message, screen: str, first_name: str = "друг") -> None:
     """Удаляет прошлый экран и присылает новый с нужной обложкой."""
     filename, caption, keyboard = SCREENS[screen]
     await message.delete()
     await message.answer_photo(
         FSInputFile(COVERS_DIR / filename),
-        caption=caption,
+        caption=caption.format(first_name=html.escape(first_name)),
         reply_markup=keyboard,
     )
 
@@ -145,7 +171,33 @@ async def show_category(message: Message, category: str) -> None:
 async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     filename, caption, keyboard = SCREENS["menu"]
-    await message.answer_photo(FSInputFile(COVERS_DIR / filename), caption=caption, reply_markup=keyboard)
+    await message.answer_photo(
+        FSInputFile(COVERS_DIR / filename),
+        caption=caption.format(first_name=html.escape(message.from_user.first_name)),
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data == "profile")
+async def open_profile(callback: CallbackQuery, state: FSMContext) -> None:
+    """Поля с нулями заменятся данными Supabase на этапе подключения БД."""
+    await state.clear()
+    await callback.answer()
+    await callback.message.delete()
+    user = callback.from_user
+    username = f"@{html.escape(user.username)}" if user.username else "@не указан"
+    caption = (
+        "<b>Профиль</b>\n\n"
+        f"{username} | <code>{user.id}</code>\n\n"
+        "Баланс: <b>0 ₽</b> | <b>$0.00</b>\n"
+        "Рефералов: <b>0</b>\n"
+        "Покупок: <b>0</b>"
+    )
+    await callback.message.answer_photo(
+        FSInputFile(COVERS_DIR / "профиль.jpg"),
+        caption=caption,
+        reply_markup=profile_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "catalog")
@@ -160,7 +212,7 @@ async def open_catalog(callback: CallbackQuery, state: FSMContext) -> None:
 async def open_screen(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
-    await replace_with_screen(callback.message, callback.data)
+    await replace_with_screen(callback.message, callback.data, callback.from_user.first_name)
 
 
 @router.callback_query(F.data.startswith("category:"))
@@ -175,10 +227,15 @@ async def open_category(callback: CallbackQuery) -> None:
 async def choose_wallet_amount(callback: CallbackQuery) -> None:
     amount = callback.data.split(":", maxsplit=1)[1]
     await callback.answer("Сумма выбрана")
-    await callback.message.answer(
-        f"Вы выбрали пополнение на ${amount}.\n"
-        "Оплата через Crypto Pay будет подключена следующим этапом.",
-        reply_markup=back_keyboard("wallet"),
+    await show_payment_options(callback.message, f"${amount}")
+
+
+async def show_payment_options(message: Message, amount: str) -> None:
+    await message.delete()
+    await message.answer(
+        f"<b>Пополнение на {amount}</b>\n\n"
+        "Выберите способ оплаты. Для оплаты через Crypto Bot напишите администратору.",
+        reply_markup=payment_keyboard(),
     )
 
 
@@ -200,11 +257,7 @@ async def receive_custom_amount(message: Message, state: FSMContext) -> None:
         await message.answer("Введите сумму числом от $0.01 до $10 000.")
         return
     await state.clear()
-    await message.answer(
-        f"Сумма пополнения: <b>${amount:.2f}</b>.\n"
-        "Счёт Crypto Pay будет создан после подключения платежей.",
-        reply_markup=back_keyboard("wallet"),
-    )
+    await show_payment_options(message, f"${amount:.2f}")
 
 
 @router.callback_query(F.data == "link_not_set")
