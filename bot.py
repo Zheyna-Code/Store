@@ -32,16 +32,61 @@ class WalletState(StatesGroup):
     waiting_for_amount = State()
 
 
+EMOJI = {
+    "catalog": "5312361253610475399",
+    "wallet": "5445353829304387411",
+    "bonus": "5406756500108501710",
+    "support": "5253742260054409879",
+    "other": "5222444124698853913",
+    "wave": "5440431182602842059",
+    "chatgpt": "6134246530380472478",
+    "claude": "6131771460986872161",
+    "duolingo": "5796371348808799072",
+    "netflix": "5796522630441867305",
+    "spotify": "5796304385973686816",
+    "grok": "6179337489350663129",
+    "capcut": "5267309292943331240",
+    "perplexity": "5321199630585732877",
+    "gemini": "5321197740800120767",
+    "dollar": "5409048419211682843",
+    "write": "5458382591121964689",
+    "link": "5271604874419647061",
+    "crypto": "5276137490846075469",
+    "admin_payment": "5201691993775818138",
+}
+
+
 def button(text: str, callback_data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=callback_data)
 
 
+def premium_button(text: str, callback_data: str, emoji_id: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=callback_data,
+        icon_custom_emoji_id=emoji_id,
+    )
+
+
+def premium_link_button(text: str, url: str, emoji_id: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, url=url, icon_custom_emoji_id=emoji_id)
+
+
+def premium_emoji(emoji_id: str, fallback: str) -> str:
+    """HTML-разметка premium emoji для текста и подписей."""
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+def dollars(amount: str) -> str:
+    return f"{premium_emoji(EMOJI['dollar'], '💵')}{amount}"
+
+
 def menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [button("🛍 Каталог", "catalog"), button("💰 Кошелёк", "wallet")],
-        [button("🎁 Бонус", "bonus"), button("👤 Профиль", "profile")],
-        [button("🛟 Техподдержка", "support")],
-        [button("📌 Прочее", "other")],
+        [premium_button("Каталог", "catalog", EMOJI["catalog"]), premium_button("Кошелёк", "wallet", EMOJI["wallet"])],
+        [premium_button("Бонус", "bonus", EMOJI["bonus"]), button("👤 Профиль", "profile")],
+        [premium_button("Техподдержка", "support", EMOJI["support"])],
+        [premium_button("Прочее", "other", EMOJI["other"])],
     ])
 
 
@@ -51,11 +96,12 @@ def back_keyboard(destination: str = "menu") -> InlineKeyboardMarkup:
 
 def catalog_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [button("ChatGPT", "category:chatgpt"), button("Claude", "category:claude")],
-        [button("Gemini", "category:gemini")],
-        [button("Notion", "category:notion"), button("Grok", "category:grok")],
-        [button("Perplexity", "category:perplexity"), button("Netflix", "category:netflix")],
-        [button("Duolingo", "category:duolingo"), button("CapCut", "category:capcut")],
+        [premium_button("ChatGPT", "category:chatgpt", EMOJI["chatgpt"]), premium_button("Claude", "category:claude", EMOJI["claude"])],
+        [premium_button("Gemini", "category:gemini", EMOJI["gemini"])],
+        [button("📝 Notion", "category:notion"), premium_button("Grok", "category:grok", EMOJI["grok"])],
+        [premium_button("Perplexity", "category:perplexity", EMOJI["perplexity"]), premium_button("Netflix", "category:netflix", EMOJI["netflix"])],
+        [premium_button("Duolingo", "category:duolingo", EMOJI["duolingo"]), premium_button("CapCut", "category:capcut", EMOJI["capcut"])],
+        [premium_button("Spotify", "category:spotify", EMOJI["spotify"])],
         [button("← Назад", "menu")],
     ])
 
@@ -63,9 +109,9 @@ def catalog_keyboard() -> InlineKeyboardMarkup:
 def wallet_keyboard() -> InlineKeyboardMarkup:
     amounts = ["1", "3", "5", "10", "25"]
     rows = [
-        [button(f"${amount}", f"wallet_amount:{amount}") for amount in amounts[:3]],
-        [button(f"${amount}", f"wallet_amount:{amount}") for amount in amounts[3:]],
-        [button("✍️ Своя сумма", "wallet_custom")],
+        [premium_button(amount, f"wallet_amount:{amount}", EMOJI["dollar"]) for amount in amounts[:3]],
+        [premium_button(amount, f"wallet_amount:{amount}", EMOJI["dollar"]) for amount in amounts[3:]],
+        [premium_button("Своя сумма", "wallet_custom", EMOJI["write"])],
         [button("← Назад", "menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -74,27 +120,27 @@ def wallet_keyboard() -> InlineKeyboardMarkup:
 def other_keyboard() -> InlineKeyboardMarkup:
     rows = []
     links = [
-        ("🛡 Условия гарантии", settings.warranty_url),
-        ("📄 Пользовательское соглашение", settings.terms_url),
-        ("🔒 Политика конфиденциальности", settings.privacy_url),
+        ("Условия гарантии", settings.warranty_url),
+        ("Пользовательское соглашение", settings.terms_url),
+        ("Политика конфиденциальности", settings.privacy_url),
     ]
     for text, url in links:
-        rows.append([InlineKeyboardButton(text=text, url=url)] if url else [button(text, "link_not_set")])
+        rows.append([premium_link_button(text, url, EMOJI["link"])] if url else [premium_button(text, "link_not_set", EMOJI["link"])])
     rows.append([button("← Назад", "menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def support_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✉️ Написать @DitzzmBack", url="https://t.me/DitzzmBack")],
+        [premium_link_button("Написать @DitzzmBack", "https://t.me/DitzzmBack", EMOJI["link"])],
         [button("← Назад", "menu")],
     ])
 
 
 def payment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Crypto Bot — через администратора", url="https://t.me/DitzzmBack")],
-        [InlineKeyboardButton(text="👤 Оплата через администратора", url="https://t.me/DitzzmBack")],
+        [premium_link_button("Crypto Bot", "https://t.me/DitzzmBack", EMOJI["crypto"])],
+        [premium_link_button("Оплата через администратора", "https://t.me/DitzzmBack", EMOJI["admin_payment"])],
         [button("← В меню", "menu")],
     ])
 
@@ -107,7 +153,7 @@ SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
     "menu": (
         "меню.jpg",
         "<b>ГЛАВНОЕ МЕНЮ</b>\n\n"
-        "Привет, {first_name}\n\n"
+        "Привет, {wave} {first_name}\n\n"
         "Добро пожаловать в магазин <b>Лавка Странника</b>\n\n"
         "Здесь ты можешь быстро и удобно купить нужные товары, "
         "пополнить баланс и посмотреть свои покупки.",
@@ -133,8 +179,9 @@ CATEGORIES: dict[str, tuple[str | None, str]] = {
     "grok": ("grok-cover.png", "Grok"),
     "perplexity": ("perplexity-cover.png", "Perplexity"),
     "netflix": ("нетфликс.png", "Netflix"),
-    "duolingo": (None, "Duolingo"),
+    "duolingo": ("duolingo.png", "Duolingo"),
     "capcut": ("capcut-cover.png", "CapCut"),
+    "spotify": ("спотифай.png", "Spotify"),
 }
 
 
@@ -144,7 +191,10 @@ async def replace_with_screen(message: Message, screen: str, first_name: str = "
     await message.delete()
     await message.answer_photo(
         FSInputFile(COVERS_DIR / filename),
-        caption=caption.format(first_name=html.escape(first_name)),
+        caption=caption.format(
+            first_name=html.escape(first_name),
+            wave=premium_emoji(EMOJI["wave"], "👋"),
+        ),
         reply_markup=keyboard,
     )
 
@@ -173,7 +223,10 @@ async def command_menu(message: Message, state: FSMContext) -> None:
     filename, caption, keyboard = SCREENS["menu"]
     await message.answer_photo(
         FSInputFile(COVERS_DIR / filename),
-        caption=caption.format(first_name=html.escape(message.from_user.first_name)),
+        caption=caption.format(
+            first_name=html.escape(message.from_user.first_name),
+            wave=premium_emoji(EMOJI["wave"], "👋"),
+        ),
         reply_markup=keyboard,
     )
 
@@ -189,7 +242,7 @@ async def open_profile(callback: CallbackQuery, state: FSMContext) -> None:
     caption = (
         "<b>Профиль</b>\n\n"
         f"{username} | <code>{user.id}</code>\n\n"
-        "Баланс: <b>0 ₽</b> | <b>$0.00</b>\n"
+        f"Баланс: <b>0 ₽</b> | <b>{dollars('0.00')}</b>\n"
         "Рефералов: <b>0</b>\n"
         "Покупок: <b>0</b>"
     )
@@ -231,7 +284,7 @@ async def open_category(callback: CallbackQuery) -> None:
 async def choose_wallet_amount(callback: CallbackQuery) -> None:
     amount = callback.data.split(":", maxsplit=1)[1]
     await callback.answer("Сумма выбрана")
-    await show_payment_options(callback.message, f"${amount}")
+    await show_payment_options(callback.message, dollars(amount))
 
 
 async def show_payment_options(message: Message, amount: str) -> None:
@@ -258,10 +311,10 @@ async def receive_custom_amount(message: Message, state: FSMContext) -> None:
         if not 0 < amount <= 10_000:
             raise ValueError
     except ValueError:
-        await message.answer("Введите сумму числом от $0.01 до $10 000.")
+        await message.answer(f"Введите сумму числом от {dollars('0.01')} до {dollars('10 000')}.")
         return
     await state.clear()
-    await show_payment_options(message, f"${amount:.2f}")
+    await show_payment_options(message, dollars(f"{amount:.2f}"))
 
 
 @router.message(F.entities)
