@@ -205,7 +205,11 @@ async def open_catalog(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     await callback.message.delete()
-    await callback.message.answer("<b>Каталог</b>\nВыберите категорию:", reply_markup=catalog_keyboard())
+    await callback.message.answer_photo(
+        FSInputFile(COVERS_DIR / "каталог.jpg"),
+        caption="<b>Каталог</b>\nВыберите категорию:",
+        reply_markup=catalog_keyboard(),
+    )
 
 
 @router.callback_query(F.data.in_(SCREENS.keys()))
