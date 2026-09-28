@@ -129,18 +129,6 @@ def back_keyboard(destination: str = "menu") -> InlineKeyboardMarkup:
     ]])
 
 
-def catalog_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [premium_button("ChatGPT", "category:chatgpt", EMOJI["chatgpt"]), premium_button("Claude", "category:claude", EMOJI["claude"])],
-        [premium_button("Gemini", "category:gemini", EMOJI["gemini"])],
-        [premium_button("Notion", "category:notion", EMOJI["notion"]), premium_button("Grok", "category:grok", EMOJI["grok"])],
-        [premium_button("Perplexity", "category:perplexity", EMOJI["perplexity"]), premium_button("Netflix", "category:netflix", EMOJI["netflix"])],
-        [premium_button("Duolingo", "category:duolingo", EMOJI["duolingo"]), premium_button("CapCut", "category:capcut", EMOJI["capcut"])],
-        [premium_button("Spotify", "category:spotify", EMOJI["spotify"])],
-        [premium_button("Назад", "menu", EMOJI["back"], style="danger")],
-    ])
-
-
 def wallet_keyboard() -> InlineKeyboardMarkup:
     amounts = ["1", "3", "5", "10", "25"]
     rows = [
@@ -180,11 +168,9 @@ def payment_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def shop_keyboard(products: list[dict]) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=f"{product['name']} — {product['price']} ₽", callback_data=f"buy:{product['id']}")]
-        for product in products
-    ]
+def shop_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=category["name"], callback_data=f"category:{category['id']}")]
+            for category in categories]
     rows.append([premium_button("Назад", "menu", EMOJI["back"], style="danger")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -278,23 +264,33 @@ async def replace_with_screen(message: Message, screen: str, first_name: str = "
     )
 
 
-async def show_category(message: Message, category: str) -> None:
-    filename, title = CATEGORIES[category]
+async def show_category(message: Message, category_id: int) -> None:
+    categories = await get_database().active_categories()
+    category = next((item for item in categories if item["id"] == category_id), None)
+    if category is None:
+        await message.answer("Категория сейчас недоступна.", reply_markup=back_keyboard("catalog"))
+        return
+    title = category["name"]
+    filename = CATEGORIES.get(title.lower(), (None, title))[0]
+    products = await get_database().category_products(category_id)
     await message.delete()
-    emoji_id, fallback = CATEGORY_EMOJI[category]
+    emoji_id, fallback = CATEGORY_EMOJI.get(title.lower(), (EMOJI["catalog"], "🛍"))
     caption = (
-        f"<b>{title}</b> {premium_emoji(emoji_id, fallback)}\n\n"
-        f"Выберите подходящий товар из списка ниже {premium_emoji(EMOJI['food'], '🍔')}\n"
-        f"После выбора вы сможете ознакомиться с деталями и оформить покупку {premium_emoji(EMOJI['document'], '📄')}"
+        f"<b>{html.escape(title)}</b> {premium_emoji(emoji_id, fallback)}\n\n"
+        + ("Выберите товар из списка ниже." if products else "В этой категории пока нет товаров.")
     )
+    rows = [[InlineKeyboardButton(text=f"{p['name']} · {p['price']} ₽" + (" · нет в наличии" if not p["stock_count"] else ""), callback_data=f"product:{p['id']}")]
+            for p in products]
+    rows.append([premium_button("Назад к категориям", "catalog", EMOJI["back"], style="danger")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     if filename and (COVERS_DIR / filename).exists():
         await message.answer_photo(
             FSInputFile(COVERS_DIR / filename),
             caption=caption,
-            reply_markup=back_keyboard("catalog"),
+            reply_markup=keyboard,
         )
     else:
-        await message.answer(caption, reply_markup=back_keyboard("catalog"))
+        await message.answer(caption, reply_markup=keyboard)
 
 
 @router.message(Command("start", "menu"))
@@ -356,15 +352,35 @@ async def open_catalog(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     await callback.message.delete()
-    products = await get_database().active_products()
+    categories = await get_database().active_categories()
     caption = (
         f"<b>Каталог</b> {premium_emoji(EMOJI['catalog'], '🏪')}\n\n"
-        + ("Выберите товар для оплаты через Crypto Pay." if products else "Сейчас нет доступных товаров.")
+        + ("Выберите категорию, затем товар." if categories else "Сейчас нет доступных категорий.")
     )
     await callback.message.answer_photo(
         FSInputFile(COVERS_DIR / "каталог.jpg"),
         caption=caption,
-        reply_markup=shop_keyboard(products),
+        reply_markup=shop_keyboard(categories),
+    )
+
+
+@router.callback_query(F.data.startswith("product:"))
+async def open_product(callback: CallbackQuery) -> None:
+    product_id = int(callback.data.split(":", 1)[1])
+    product = await get_database().product(product_id)
+    if not product or not product["is_active"]:
+        await callback.answer("Товар недоступен", show_alert=True)
+        return
+    stock = await get_database().stock(product_id)
+    available = sum(not item["is_issued"] for item in stock)
+    await callback.answer()
+    await callback.message.answer(
+        f"<b>{html.escape(product['name'])}</b>\n\n{html.escape(product['description'])}\n\n"
+        f"Цена: <b>{product['price']} ₽</b>\nВ наличии: <b>{available}</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            *([[InlineKeyboardButton(text="Купить через Crypto Pay", callback_data=f"buy:{product_id}")]] if available else []),
+            [InlineKeyboardButton(text="Назад к категории" if product["category_id"] else "Назад в каталог", callback_data=f"category:{product['category_id']}" if product["category_id"] else "catalog")],
+        ]),
     )
 
 
@@ -431,8 +447,8 @@ async def open_screen(callback: CallbackQuery, state: FSMContext) -> None:
 async def open_category(callback: CallbackQuery) -> None:
     category = callback.data.split(":", maxsplit=1)[1]
     await callback.answer()
-    if category in CATEGORIES:
-        await show_category(callback.message, category)
+    if category.isdigit():
+        await show_category(callback.message, int(category))
 
 
 @router.callback_query(F.data.startswith("wallet_amount:"))
@@ -502,10 +518,11 @@ async def main() -> None:
         raise RuntimeError("Укажите DATABASE_URL PostgreSQL в .env")
     if not settings.admin_secret or settings.admin_secret.startswith("change-this"):
         raise RuntimeError("Укажите надёжный ADMIN_SECRET в .env")
-    global database
+    global database, telegram_bot
     database = Database(settings.database_url)
     await database.connect()
     bot = Bot(token=settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    telegram_bot = bot
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     health_runner = await start_health_server()
@@ -544,7 +561,11 @@ async def admin_login(request: web.Request) -> web.Response:
 
 
 async def admin_page(_: web.Request) -> web.Response:
-    return web.Response(text=ADMIN_HTML, content_type="text/html")
+    return web.Response(text=ADMIN_HTML, content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+async def admin_script(_: web.Request) -> web.Response:
+    return web.FileResponse(Path(__file__).resolve().parent / "admin.js", headers={"Cache-Control": "no-store"})
 
 
 async def admin_dashboard(request: web.Request) -> web.Response:
@@ -676,6 +697,7 @@ async def start_health_server() -> web.AppRunner:
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/admin", admin_page)
+    app.router.add_get("/admin.js", admin_script)
     app.router.add_post("/api/admin/login", admin_login)
     app.router.add_get("/api/admin/dashboard", admin_dashboard)
     app.router.add_get("/api/admin/categories", admin_categories)

@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import date, datetime
 from typing import Any
 
 import asyncpg
+
+
+DEFAULT_CATEGORIES = (
+    "ChatGPT", "Claude", "Gemini", "Notion", "Grok",
+    "Perplexity", "Netflix", "Duolingo", "CapCut", "Spotify",
+)
+
+
+def public_row(row: asyncpg.Record) -> dict[str, Any]:
+    return {
+        key: value.isoformat() if isinstance(value, (date, datetime)) else str(value) if isinstance(value, Decimal) else value
+        for key, value in dict(row).items()
+    }
 
 
 SCHEMA = """
@@ -85,6 +99,13 @@ class Database:
         self.pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=5)
         async with self.pool.acquire() as connection:
             await connection.execute(SCHEMA)
+            # Only bootstrap a fresh shop. Admin edits must survive subsequent restarts.
+            if not await connection.fetchval("SELECT EXISTS(SELECT 1 FROM categories)"):
+                await connection.executemany(
+                    """INSERT INTO categories(name, sort_order) VALUES($1, $2)
+                       ON CONFLICT (name) DO NOTHING""",
+                    [(name, position) for position, name in enumerate(DEFAULT_CATEGORIES, 1)],
+                )
 
     async def close(self) -> None:
         if self.pool:
@@ -123,6 +144,10 @@ class Database:
 
     async def list_categories(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("SELECT * FROM categories ORDER BY sort_order, name")
+        return [public_row(row) for row in rows]
+
+    async def active_categories(self) -> list[dict[str, Any]]:
+        rows = await self._pool().fetch("SELECT id, name FROM categories WHERE is_active ORDER BY sort_order, name")
         return [dict(row) for row in rows]
 
     async def save_category(self, data: dict[str, Any], category_id: int | None = None) -> dict[str, Any]:
@@ -132,24 +157,31 @@ class Database:
             row = await self._pool().fetchrow("INSERT INTO categories(name, sort_order, is_active) VALUES($1,$2,$3) RETURNING *", data["name"], data.get("sort_order", 0), data.get("is_active", True))
         if not row:
             raise ValueError("Категория не найдена")
-        return dict(row)
+        return public_row(row)
 
     async def list_products(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("""SELECT p.*, c.name AS category_name,
              COUNT(s.id) FILTER (WHERE NOT s.is_issued) AS stock_count
              FROM products p LEFT JOIN categories c ON c.id=p.category_id
              LEFT JOIN stock_items s ON s.product_id=p.id GROUP BY p.id, c.name ORDER BY p.created_at DESC""")
-        return [{**dict(row), "price": str(row["price"])} for row in rows]
+        return [public_row(row) for row in rows]
 
     async def product(self, product_id: int) -> dict[str, Any] | None:
         row = await self._pool().fetchrow("SELECT * FROM products WHERE id=$1", product_id)
-        return {**dict(row), "price": str(row["price"])} if row else None
+        return public_row(row) if row else None
 
     async def active_products(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("""SELECT p.*, COUNT(s.id) FILTER (WHERE NOT s.is_issued) AS stock_count
             FROM products p LEFT JOIN stock_items s ON s.product_id=p.id
             WHERE p.is_active GROUP BY p.id HAVING COUNT(s.id) FILTER (WHERE NOT s.is_issued) > 0 ORDER BY p.created_at DESC""")
-        return [{**dict(row), "price": str(row["price"])} for row in rows]
+        return [public_row(row) for row in rows]
+
+    async def category_products(self, category_id: int) -> list[dict[str, Any]]:
+        rows = await self._pool().fetch("""SELECT p.id, p.name, p.description, p.price,
+            COUNT(s.id) FILTER (WHERE NOT s.is_issued) AS stock_count
+            FROM products p LEFT JOIN stock_items s ON s.product_id=p.id
+            WHERE p.category_id=$1 AND p.is_active GROUP BY p.id ORDER BY p.created_at DESC""", category_id)
+        return [public_row(row) for row in rows]
 
     async def create_crypto_order(self, customer_id: int, product_id: int) -> dict[str, Any]:
         async with self._pool().acquire() as connection, connection.transaction():
@@ -191,7 +223,7 @@ class Database:
             row = await self._pool().fetchrow("INSERT INTO products(name,description,price,category_id,is_active) VALUES($1,$2,$3,$4,$5) RETURNING *", *values)
         if not row:
             raise ValueError("Товар не найден")
-        return {**dict(row), "price": str(row["price"])}
+        return public_row(row)
 
     async def delete_product(self, product_id: int) -> None:
         result = await self._pool().execute("DELETE FROM products WHERE id=$1", product_id)
@@ -200,7 +232,7 @@ class Database:
 
     async def stock(self, product_id: int) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("SELECT * FROM stock_items WHERE product_id=$1 ORDER BY id", product_id)
-        return [dict(row) for row in rows]
+        return [public_row(row) for row in rows]
 
     async def replace_stock(self, product_id: int, items: list[str]) -> None:
         async with self._pool().acquire() as connection, connection.transaction():
@@ -215,7 +247,7 @@ class Database:
         rows = await self._pool().fetch("""SELECT c.*, COUNT(o.id) AS purchases FROM customers c LEFT JOIN orders o ON o.customer_id=c.telegram_id
             WHERE $1='' OR LOWER(COALESCE(c.username,'')) LIKE '%' || LOWER($1) || '%'
             GROUP BY c.telegram_id ORDER BY c.last_seen_at DESC LIMIT 200""", query.lstrip("@"))
-        return [{**dict(row), "balance": str(row["balance"])} for row in rows]
+        return [public_row(row) for row in rows]
 
     async def grant_balance(self, username: str, amount: Decimal, reason: str) -> dict[str, Any]:
         async with self._pool().acquire() as connection, connection.transaction():
@@ -223,13 +255,13 @@ class Database:
             if not row:
                 raise ValueError("Покупатель с таким username не найден")
             await connection.execute("INSERT INTO balance_transactions(customer_id, amount, reason) VALUES($1,$2,$3)", row["telegram_id"], amount, reason or "Выдано администратором")
-            return {**dict(row), "balance": str(row["balance"])}
+            return public_row(row)
 
     async def orders(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("""SELECT o.*, p.name AS product_name, c.username, c.first_name FROM orders o
             LEFT JOIN products p ON p.id=o.product_id LEFT JOIN customers c ON c.telegram_id=o.customer_id
             ORDER BY o.created_at DESC LIMIT 500""")
-        return [{**dict(row), "amount": str(row["amount"])} for row in rows]
+        return [public_row(row) for row in rows]
 
     async def visit(self, path: str, visitor_key: str | None) -> None:
         await self._pool().execute("INSERT INTO page_visits(path, visitor_key) VALUES($1,$2)", path, visitor_key)
