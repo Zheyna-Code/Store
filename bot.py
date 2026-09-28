@@ -35,12 +35,13 @@ class WalletState(StatesGroup):
 
 
 EMOJI = {
-    "catalog": "5312361253610475399",
-    "wallet": "5445353829304387411",
-    "bonus": "5406756500108501710",
-    "support": "5253742260054409879",
-    "other": "5222444124698853913",
-    "wave": "5440431182602842059",
+    # Интерфейсные emoji из curated_packs.json. Иконки AI-категорий ниже не меняем.
+    "catalog": "5983399041197675256",
+    "wallet": "5769403330761593044",
+    "bonus": "6032937473162614352",
+    "support": "5886666250158870040",
+    "other": "5958376256788502078",
+    "wave": "5906995262378741881",
     "chatgpt": "6134246530380472478",
     "claude": "6131771460986872161",
     "notion": "5364199932620194408",
@@ -51,11 +52,20 @@ EMOJI = {
     "capcut": "5267309292943331240",
     "perplexity": "5321199630585732877",
     "gemini": "5321197740800120767",
-    "dollar": "5409048419211682843",
-    "write": "5458382591121964689",
-    "link": "5271604874419647061",
-    "crypto": "5276137490846075469",
-    "admin_payment": "5201691993775818138",
+    "dollar": "5967390100357648692",
+    "write": "5258331647358540449",
+    "link": "5877465816030515018",
+    "crypto": "5769403330761593044",
+    "admin_payment": "5776375003280838798",
+    "profile": "5771887475421090729",
+    "friends": "5915556996215476302",
+    "card": "5967548335542767952",
+    "document": "5839323457015256759",
+    "food": "5875271289605722323",
+    "candy": "5987565374223159187",
+    "new": "5886306834410640699",
+    "back": "5875082500023258804",
+    "plane": "5875465628285931233",
 }
 
 
@@ -63,17 +73,23 @@ def button(text: str, callback_data: str, *, style: str = "primary") -> InlineKe
     return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
 
 
-def premium_button(text: str, callback_data: str, emoji_id: str) -> InlineKeyboardButton:
+def premium_button(
+    text: str,
+    callback_data: str,
+    emoji_id: str,
+    *,
+    style: str = "primary",
+) -> InlineKeyboardButton:
     return InlineKeyboardButton(
         text=text,
         callback_data=callback_data,
         icon_custom_emoji_id=emoji_id,
-        style="primary",
+        style=style,
     )
 
 
-def premium_link_button(text: str, url: str, emoji_id: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, url=url, icon_custom_emoji_id=emoji_id, style="primary")
+def premium_link_button(text: str, url: str, emoji_id: str, *, style: str = "primary") -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, url=url, icon_custom_emoji_id=emoji_id, style=style)
 
 
 def premium_emoji(emoji_id: str, fallback: str) -> str:
@@ -87,15 +103,17 @@ def dollars(amount: str) -> str:
 
 def menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [premium_button("Каталог", "catalog", EMOJI["catalog"]), premium_button("Кошелёк", "wallet", EMOJI["wallet"])],
-        [premium_button("Бонус", "bonus", EMOJI["bonus"]), button("👤 Профиль", "profile")],
+        [premium_button("Каталог", "catalog", EMOJI["catalog"], style="success"), premium_button("Кошелёк", "wallet", EMOJI["wallet"])],
+        [premium_button("Бонус", "bonus", EMOJI["bonus"]), premium_button("Профиль", "profile", EMOJI["profile"])],
         [premium_button("Техподдержка", "support", EMOJI["support"])],
         [premium_button("Прочее", "other", EMOJI["other"])],
     ])
 
 
 def back_keyboard(destination: str = "menu") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", destination, style="danger")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        premium_button("Назад", destination, EMOJI["back"], style="danger")
+    ]])
 
 
 def catalog_keyboard() -> InlineKeyboardMarkup:
@@ -106,7 +124,7 @@ def catalog_keyboard() -> InlineKeyboardMarkup:
         [premium_button("Perplexity", "category:perplexity", EMOJI["perplexity"]), premium_button("Netflix", "category:netflix", EMOJI["netflix"])],
         [premium_button("Duolingo", "category:duolingo", EMOJI["duolingo"]), premium_button("CapCut", "category:capcut", EMOJI["capcut"])],
         [premium_button("Spotify", "category:spotify", EMOJI["spotify"])],
-        [button("← Назад", "menu", style="danger")],
+        [premium_button("Назад", "menu", EMOJI["back"], style="danger")],
     ])
 
 
@@ -116,7 +134,7 @@ def wallet_keyboard() -> InlineKeyboardMarkup:
         [premium_button(amount, f"wallet_amount:{amount}", EMOJI["dollar"]) for amount in amounts[:3]],
         [premium_button(amount, f"wallet_amount:{amount}", EMOJI["dollar"]) for amount in amounts[3:]],
         [premium_button("Своя сумма", "wallet_custom", EMOJI["write"])],
-        [button("← Назад", "menu", style="danger")],
+        [premium_button("Назад", "menu", EMOJI["back"], style="danger")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -130,14 +148,14 @@ def other_keyboard() -> InlineKeyboardMarkup:
     ]
     for text, url in links:
         rows.append([premium_link_button(text, url, EMOJI["link"])] if url else [premium_button(text, "link_not_set", EMOJI["link"])])
-    rows.append([button("← Назад", "menu", style="danger")])
+    rows.append([premium_button("Назад", "menu", EMOJI["back"], style="danger")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def support_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [premium_link_button("Написать", "https://t.me/DitzzmBack", EMOJI["link"])],
-        [button("← Назад", "menu", style="danger")],
+        [premium_button("Назад", "menu", EMOJI["back"], style="danger")],
     ])
 
 
@@ -145,12 +163,14 @@ def payment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [premium_link_button("Crypto Bot", "https://t.me/DitzzmBack", EMOJI["crypto"])],
         [premium_link_button("Оплата через администратора", "https://t.me/DitzzmBack", EMOJI["admin_payment"])],
-        [button("← В меню", "menu", style="danger")],
+        [premium_button("В меню", "menu", EMOJI["back"], style="danger")],
     ])
 
 
 def profile_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[button("← Назад", "menu", style="danger")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        premium_button("Назад", "menu", EMOJI["back"], style="danger")
+    ]])
 
 
 SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
@@ -158,7 +178,7 @@ SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
         "меню.png",
         "<b>ГЛАВНОЕ МЕНЮ</b> {plane}\n\n"
         "Привет, {wave} {first_name}\n\n"
-        "Добро пожаловать в магазин <b>Nexus</b> <b>Store</b> 🏪\n\n"
+        "Добро пожаловать в магазин <b>Nexus</b> <b>Store</b> {store}\n\n"
         "Здесь ты можешь быстро и удобно купить нужные товары, "
         "пополнить баланс и посмотреть свои покупки. {dollar}",
         menu_keyboard(),
@@ -171,18 +191,18 @@ SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
     ),
     "bonus": (
         "бонус.jpg",
-        "<b>Бонус</b> 🎁\n\n"
+        "<b>Бонус</b> {gift}\n\n"
         "Пригласи своего друга и получи награду за его первую покупку "
-        "в размере <b>5%</b> на свой баланс 👥",
+        "в размере <b>5%</b> на свой баланс {friends}",
         back_keyboard(),
     ),
     "support": (
         "тех подержка.jpg",
         "<b>Техподдержка</b> {plane}\n"
-        "Возникли вопросы или проблемы 🍭 Напишите в поддержку 💬",
+        "Возникли вопросы или проблемы {candy} Напишите в поддержку {chat}",
         support_keyboard(),
     ),
-    "other": ("прочее.jpg", "<b>Прочее</b> ⭐️\nДокументы и важная информация 🆕", other_keyboard()),
+    "other": ("прочее.jpg", "<b>Прочее</b> {star}\nДокументы и важная информация {new}", other_keyboard()),
 }
 
 CATEGORIES: dict[str, tuple[str | None, str]] = {
@@ -221,9 +241,16 @@ async def replace_with_screen(message: Message, screen: str, first_name: str = "
         caption=caption.format(
             first_name=html.escape(first_name),
             wave=premium_emoji(EMOJI["wave"], "👋"),
-            plane=premium_emoji(EMOJI["admin_payment"], "✈️"),
+            plane=premium_emoji(EMOJI["plane"], "✈️"),
             crypto=premium_emoji(EMOJI["crypto"], "👛"),
             dollar=premium_emoji(EMOJI["dollar"], "💵"),
+            store=premium_emoji(EMOJI["catalog"], "🏪"),
+            gift=premium_emoji(EMOJI["bonus"], "🎁"),
+            friends=premium_emoji(EMOJI["friends"], "👥"),
+            candy=premium_emoji(EMOJI["candy"], "🍭"),
+            chat=premium_emoji(EMOJI["support"], "💬"),
+            star=premium_emoji(EMOJI["other"], "⭐️"),
+            new=premium_emoji(EMOJI["new"], "🆕"),
         ),
         reply_markup=keyboard,
     )
@@ -235,8 +262,8 @@ async def show_category(message: Message, category: str) -> None:
     emoji_id, fallback = CATEGORY_EMOJI[category]
     caption = (
         f"<b>{title}</b> {premium_emoji(emoji_id, fallback)}\n\n"
-        "Выберите подходящий товар из списка ниже 🍔\n"
-        "После выбора вы сможете ознакомиться с деталями и оформить покупку 📄"
+        f"Выберите подходящий товар из списка ниже {premium_emoji(EMOJI['food'], '🍔')}\n"
+        f"После выбора вы сможете ознакомиться с деталями и оформить покупку {premium_emoji(EMOJI['document'], '📄')}"
     )
     if filename and (COVERS_DIR / filename).exists():
         await message.answer_photo(
@@ -257,9 +284,16 @@ async def command_menu(message: Message, state: FSMContext) -> None:
         caption=caption.format(
             first_name=html.escape(message.from_user.first_name),
             wave=premium_emoji(EMOJI["wave"], "👋"),
-            plane=premium_emoji(EMOJI["admin_payment"], "✈️"),
+            plane=premium_emoji(EMOJI["plane"], "✈️"),
             crypto=premium_emoji(EMOJI["crypto"], "👛"),
             dollar=premium_emoji(EMOJI["dollar"], "💵"),
+            store=premium_emoji(EMOJI["catalog"], "🏪"),
+            gift=premium_emoji(EMOJI["bonus"], "🎁"),
+            friends=premium_emoji(EMOJI["friends"], "👥"),
+            candy=premium_emoji(EMOJI["candy"], "🍭"),
+            chat=premium_emoji(EMOJI["support"], "💬"),
+            star=premium_emoji(EMOJI["other"], "⭐️"),
+            new=premium_emoji(EMOJI["new"], "🆕"),
         ),
         reply_markup=keyboard,
     )
@@ -274,11 +308,11 @@ async def open_profile(callback: CallbackQuery, state: FSMContext) -> None:
     user = callback.from_user
     username = f"@{html.escape(user.username)}" if user.username else "@не указан"
     caption = (
-        "<b>Профиль</b> 👤\n\n"
+        f"<b>Профиль</b> {premium_emoji(EMOJI['profile'], '👤')}\n\n"
         f"{username} | <code>{user.id}</code>\n\n"
         f"Баланс: <b>0.00</b> {premium_emoji(EMOJI['dollar'], '💵')}\n"
-        "Рефералов: <b>0</b> 👥\n"
-        "Покупок: <b>0</b> 💳"
+        f"Рефералов: <b>0</b> {premium_emoji(EMOJI['friends'], '👥')}\n"
+        f"Покупок: <b>0</b> {premium_emoji(EMOJI['card'], '💳')}"
     )
     await callback.message.answer_photo(
         FSInputFile(COVERS_DIR / "профиль.jpg"),
@@ -294,7 +328,10 @@ async def open_catalog(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.delete()
     await callback.message.answer_photo(
         FSInputFile(COVERS_DIR / "каталог.jpg"),
-        caption="<b>Каталог</b> 🏪\nВыберите категорию из списка ниже для просмотра доступных предложений 🍔",
+        caption=(
+            f"<b>Каталог</b> {premium_emoji(EMOJI['catalog'], '🏪')}\n"
+            f"Выберите категорию из списка ниже для просмотра доступных предложений {premium_emoji(EMOJI['food'], '🍔')}"
+        ),
         reply_markup=catalog_keyboard(),
     )
 
@@ -325,7 +362,7 @@ async def show_payment_options(message: Message, amount: str) -> None:
     await message.delete()
     await message.answer(
         f"<b>Пополнение на {amount}</b>\n\n"
-        "Выберите способ оплаты 💳",
+        f"Выберите способ оплаты {premium_emoji(EMOJI['card'], '💳')}",
         reply_markup=payment_keyboard(),
     )
 
