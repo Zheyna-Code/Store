@@ -157,7 +157,7 @@ SCREENS: dict[str, tuple[str, str, InlineKeyboardMarkup]] = {
     "menu": (
         "меню.png",
         "<b>ГЛАВНОЕ МЕНЮ</b> {plane}\n\n"
-        "Привет, {wave} {first_name} | Check BIO\n\n"
+        "Привет, {wave} {first_name}\n\n"
         "Добро пожаловать в магазин <b>Nexus</b> <b>Store</b> 🏪\n\n"
         "Здесь ты можешь быстро и удобно купить нужные товары, "
         "пополнить баланс и посмотреть свои покупки. {dollar}",
