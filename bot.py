@@ -169,8 +169,14 @@ def payment_keyboard() -> InlineKeyboardMarkup:
 
 
 def shop_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=category["name"], callback_data=f"category:{category['id']}")]
-            for category in categories]
+    rows = [
+        [premium_button(
+            category["name"],
+            f"category:{category['id']}",
+            CATEGORY_EMOJI.get(category["name"].lower(), (EMOJI["catalog"], ""))[0],
+        )]
+        for category in categories
+    ]
     rows.append([premium_button("Назад", "menu", EMOJI["back"], style="danger")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -279,8 +285,11 @@ async def show_category(message: Message, category_id: int) -> None:
         f"<b>{html.escape(title)}</b> {premium_emoji(emoji_id, fallback)}\n\n"
         + ("Выберите товар из списка ниже." if products else "В этой категории пока нет товаров.")
     )
-    rows = [[InlineKeyboardButton(text=f"{p['name']} · {p['price']} ₽" + (" · нет в наличии" if not p["stock_count"] else ""), callback_data=f"product:{p['id']}")]
-            for p in products]
+    rows = [[premium_button(
+        f"{p['name']} · {p['price']} ₽" + (" · нет в наличии" if not p["stock_count"] else ""),
+        f"product:{p['id']}",
+        EMOJI["document"],
+    )] for p in products]
     rows.append([premium_button("Назад к категориям", "catalog", EMOJI["back"], style="danger")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     if filename and (COVERS_DIR / filename).exists():
@@ -378,8 +387,13 @@ async def open_product(callback: CallbackQuery) -> None:
         f"<b>{html.escape(product['name'])}</b>\n\n{html.escape(product['description'])}\n\n"
         f"Цена: <b>{product['price']} ₽</b>\nВ наличии: <b>{available}</b>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            *([[InlineKeyboardButton(text="Купить через Crypto Pay", callback_data=f"buy:{product_id}")]] if available else []),
-            [InlineKeyboardButton(text="Назад к категории" if product["category_id"] else "Назад в каталог", callback_data=f"category:{product['category_id']}" if product["category_id"] else "catalog")],
+            *([[premium_button("Купить через Crypto Pay", f"buy:{product_id}", EMOJI["crypto"], style="success")]] if available else []),
+            [premium_button(
+                "Назад к категории" if product["category_id"] else "Назад в каталог",
+                f"category:{product['category_id']}" if product["category_id"] else "catalog",
+                EMOJI["back"],
+                style="danger",
+            )],
         ]),
     )
 
@@ -431,7 +445,7 @@ async def buy_product(callback: CallbackQuery) -> None:
         f"<b>{html.escape(order['name'])}</b>\nК оплате: <b>{order['price']} ₽</b>\n\n"
         "После подтверждения оплаты товар будет выдан автоматически.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Оплатить через Crypto Pay", url=invoice["pay_url"])
+            premium_link_button("Оплатить через Crypto Pay", invoice["pay_url"], EMOJI["crypto"])
         ]]),
     )
 
