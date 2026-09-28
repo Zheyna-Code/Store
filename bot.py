@@ -1,16 +1,18 @@
-"""Каркас витрины Telegram-магазина.
-
-Платежи Crypto Pay, Supabase и выдача товаров намеренно оставлены на следующий
-этап: этот файл уже содержит все экраны и точки, куда их подключать.
-"""
+"""Telegram-магазин Nexus с PostgreSQL и закрытой web-админкой."""
 
 import asyncio
 import html
 import logging
 import os
+import secrets
+import hashlib
+import hmac
+import json
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from aiohttp import web
+from aiohttp import ClientSession, web
+import asyncpg
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -26,8 +28,19 @@ from aiogram.types import (
 )
 
 from config import COVERS_DIR, settings
+from admin_page import ADMIN_HTML
+from storage import Database
 
 router = Router()
+database: Database | None = None
+telegram_bot: Bot | None = None
+admin_sessions: set[str] = set()
+
+
+def get_database() -> Database:
+    if not database:
+        raise RuntimeError("PostgreSQL не подключён")
+    return database
 
 
 class WalletState(StatesGroup):
@@ -167,6 +180,15 @@ def payment_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def shop_keyboard(products: list[dict]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=f"{product['name']} — {product['price']} ₽", callback_data=f"buy:{product['id']}")]
+        for product in products
+    ]
+    rows.append([premium_button("Назад", "menu", EMOJI["back"], style="danger")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         premium_button("Назад", "menu", EMOJI["back"], style="danger")
@@ -278,6 +300,13 @@ async def show_category(message: Message, category: str) -> None:
 @router.message(Command("start", "menu"))
 async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
+    await get_database().upsert_customer(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+    )
+    # Считаем уникальные визиты в магазин по Telegram ID, без учёта health-check.
+    await get_database().visit("telegram-menu", str(message.from_user.id))
     filename, caption, keyboard = SCREENS["menu"]
     await message.answer_photo(
         FSInputFile(COVERS_DIR / filename),
@@ -301,16 +330,17 @@ async def command_menu(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "profile")
 async def open_profile(callback: CallbackQuery, state: FSMContext) -> None:
-    """Поля с нулями заменятся данными Supabase на этапе подключения БД."""
     await state.clear()
     await callback.answer()
     await callback.message.delete()
     user = callback.from_user
+    await get_database().upsert_customer(user.id, user.username, user.first_name)
+    customer = await get_database().customer(user.id)
     username = f"@{html.escape(user.username)}" if user.username else "@не указан"
     caption = (
         f"<b>Профиль</b> {premium_emoji(EMOJI['profile'], '👤')}\n\n"
         f"{username} | <code>{user.id}</code>\n\n"
-        f"Баланс: <b>0.00</b> {premium_emoji(EMOJI['dollar'], '💵')}\n"
+        f"Баланс: <b>{customer['balance'] if customer else '0.00'}</b> {premium_emoji(EMOJI['dollar'], '💵')}\n"
         f"Рефералов: <b>0</b> {premium_emoji(EMOJI['friends'], '👥')}\n"
         f"Покупок: <b>0</b> {premium_emoji(EMOJI['card'], '💳')}"
     )
@@ -326,13 +356,67 @@ async def open_catalog(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     await callback.message.delete()
+    products = await get_database().active_products()
+    caption = (
+        f"<b>Каталог</b> {premium_emoji(EMOJI['catalog'], '🏪')}\n\n"
+        + ("Выберите товар для оплаты через Crypto Pay." if products else "Сейчас нет доступных товаров.")
+    )
     await callback.message.answer_photo(
         FSInputFile(COVERS_DIR / "каталог.jpg"),
-        caption=(
-            f"<b>Каталог</b> {premium_emoji(EMOJI['catalog'], '🏪')}\n"
-            f"Выберите категорию из списка ниже для просмотра доступных предложений {premium_emoji(EMOJI['food'], '🍔')}"
-        ),
-        reply_markup=catalog_keyboard(),
+        caption=caption,
+        reply_markup=shop_keyboard(products),
+    )
+
+
+async def create_crypto_invoice(order: dict) -> dict:
+    """Creates a fiat RUB Crypto Pay invoice; the API token never reaches a client."""
+    request_data = {
+        "currency_type": "fiat",
+        "fiat": "RUB",
+        "accepted_assets": "USDT,TON",
+        "amount": order["price"],
+        "description": order["name"][:1024],
+        "payload": str(order["id"]),
+        "expires_in": 3600,
+    }
+    async with ClientSession() as session:
+        async with session.post(
+            "https://pay.crypt.bot/api/createInvoice",
+            json=request_data,
+            headers={"Crypto-Pay-API-Token": settings.crypto_pay_token},
+            timeout=20,
+        ) as response:
+            response_data = await response.json(content_type=None)
+    if not response.ok or not response_data.get("ok"):
+        raise RuntimeError(response_data.get("error", {}).get("name", "Crypto Pay не создал счёт"))
+    return response_data["result"]
+
+
+@router.callback_query(F.data.startswith("buy:"))
+async def buy_product(callback: CallbackQuery) -> None:
+    if not settings.crypto_pay_token:
+        await callback.answer("Оплата временно не настроена", show_alert=True)
+        return
+    try:
+        product_id = int(callback.data.split(":", maxsplit=1)[1])
+        user = callback.from_user
+        await get_database().upsert_customer(user.id, user.username, user.first_name)
+        order = await get_database().create_crypto_order(user.id, product_id)
+        invoice = await create_crypto_invoice(order)
+        await get_database().set_crypto_invoice(order["id"], int(invoice["invoice_id"]))
+    except (ValueError, RuntimeError, KeyError) as exc:
+        if "order" in locals():
+            await get_database().cancel_order(order["id"])
+        logging.exception("Unable to create Crypto Pay invoice")
+        await callback.answer(f"Не удалось создать счёт: {exc}", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.answer(
+        f"<b>{html.escape(order['name'])}</b>\nК оплате: <b>{order['price']} ₽</b>\n\n"
+        "После подтверждения оплаты товар будет выдан автоматически.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Оплатить через Crypto Pay", url=invoice["pay_url"])
+        ]]),
     )
 
 
@@ -414,6 +498,13 @@ async def link_not_set(callback: CallbackQuery) -> None:
 async def main() -> None:
     if not settings.token or settings.token == "123456789:replace_me":
         raise RuntimeError("Укажите настоящий BOT_TOKEN в файле .env")
+    if not settings.database_url:
+        raise RuntimeError("Укажите DATABASE_URL PostgreSQL в .env")
+    if not settings.admin_secret or settings.admin_secret.startswith("change-this"):
+        raise RuntimeError("Укажите надёжный ADMIN_SECRET в .env")
+    global database
+    database = Database(settings.database_url)
+    await database.connect()
     bot = Bot(token=settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
@@ -422,6 +513,7 @@ async def main() -> None:
         await dispatcher.start_polling(bot)
     finally:
         await health_runner.cleanup()
+        await database.close()
 
 
 async def health(_: web.Request) -> web.Response:
@@ -429,11 +521,176 @@ async def health(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "service": "lavka-strannika-bot"})
 
 
+def require_admin(request: web.Request) -> None:
+    token = request.headers.get("X-Admin-Token", "")
+    if not token or token not in admin_sessions:
+        raise web.HTTPUnauthorized(text='{"error":"Требуется авторизация"}', content_type="application/json")
+
+
+async def json_body(request: web.Request) -> dict:
+    try:
+        return await request.json()
+    except Exception as exc:
+        raise web.HTTPBadRequest(text='{"error":"Некорректный JSON"}', content_type="application/json") from exc
+
+
+async def admin_login(request: web.Request) -> web.Response:
+    data = await json_body(request)
+    if not secrets.compare_digest(str(data.get("secret", "")), settings.admin_secret):
+        return web.json_response({"error": "Неверный секретный ключ"}, status=401)
+    token = secrets.token_urlsafe(32)
+    admin_sessions.add(token)
+    return web.json_response({"token": token})
+
+
+async def admin_page(_: web.Request) -> web.Response:
+    return web.Response(text=ADMIN_HTML, content_type="text/html")
+
+
+async def admin_dashboard(request: web.Request) -> web.Response:
+    require_admin(request)
+    return web.json_response(await get_database().dashboard())
+
+
+async def admin_categories(request: web.Request) -> web.Response:
+    require_admin(request)
+    if request.method == "GET":
+        return web.json_response(await get_database().list_categories())
+    try:
+        return web.json_response(await get_database().save_category(await json_body(request)), status=201)
+    except (ValueError, asyncpg.UniqueViolationError) as exc:
+        return web.json_response({"error": str(exc) or "Такая категория уже существует"}, status=400)
+
+
+async def admin_category(request: web.Request) -> web.Response:
+    require_admin(request)
+    try:
+        return web.json_response(await get_database().save_category(await json_body(request), int(request.match_info["id"])))
+    except (ValueError, asyncpg.UniqueViolationError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
+async def admin_products(request: web.Request) -> web.Response:
+    require_admin(request)
+    if request.method == "GET":
+        return web.json_response(await get_database().list_products())
+    try:
+        return web.json_response(await get_database().save_product(await json_body(request)), status=201)
+    except (ValueError, InvalidOperation, asyncpg.PostgresError) as exc:
+        return web.json_response({"error": f"Не удалось сохранить товар: {exc}"}, status=400)
+
+
+async def admin_product(request: web.Request) -> web.Response:
+    require_admin(request)
+    product_id = int(request.match_info["id"])
+    try:
+        if request.method == "DELETE":
+            await get_database().delete_product(product_id)
+            return web.json_response({"ok": True})
+        return web.json_response(await get_database().save_product(await json_body(request), product_id))
+    except (ValueError, InvalidOperation, asyncpg.PostgresError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
+async def admin_stock(request: web.Request) -> web.Response:
+    require_admin(request)
+    product_id = int(request.match_info["id"])
+    if request.method == "GET":
+        return web.json_response(await get_database().stock(product_id))
+    data = await json_body(request)
+    if not isinstance(data.get("items"), list) or not all(isinstance(item, str) for item in data["items"]):
+        return web.json_response({"error": "items должен быть списком строк"}, status=400)
+    try:
+        await get_database().replace_stock(product_id, data["items"])
+        return web.json_response({"ok": True})
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+
+
+async def admin_customers(request: web.Request) -> web.Response:
+    require_admin(request)
+    return web.json_response(await get_database().customers(request.query.get("q", "")))
+
+
+async def admin_grant_balance(request: web.Request) -> web.Response:
+    require_admin(request)
+    data = await json_body(request)
+    try:
+        amount = Decimal(str(data.get("amount", "")))
+        if amount <= 0:
+            raise ValueError("Сумма должна быть больше нуля")
+        result = await get_database().grant_balance(request.match_info["username"], amount, str(data.get("reason", "")))
+        return web.json_response(result)
+    except (InvalidOperation, ValueError) as exc:
+        return web.json_response({"error": str(exc) or "Некорректная сумма"}, status=400)
+
+
+async def admin_orders(request: web.Request) -> web.Response:
+    require_admin(request)
+    return web.json_response(await get_database().orders())
+
+
+async def crypto_webhook(request: web.Request) -> web.Response:
+    """Receives signed `invoice_paid` updates from Crypto Pay and delivers once."""
+    if not settings.crypto_pay_webhook_secret or not secrets.compare_digest(
+        request.match_info["secret"], settings.crypto_pay_webhook_secret
+    ):
+        raise web.HTTPNotFound()
+    raw_body = await request.read()
+    signature = request.headers.get("crypto-pay-api-signature", "")
+    signature_key = hashlib.sha256(settings.crypto_pay_token.encode()).digest()
+    expected_signature = hmac.new(signature_key, raw_body, hashlib.sha256).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected_signature):
+        logging.warning("Rejected Crypto Pay webhook with an invalid signature")
+        raise web.HTTPUnauthorized()
+    try:
+        update = json.loads(raw_body)
+        invoice = update.get("payload", {})
+        if update.get("update_type") != "invoice_paid" or invoice.get("status") != "paid":
+            return web.json_response({"ok": True})
+        delivery = await get_database().finalize_crypto_order(int(invoice["invoice_id"]))
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        logging.warning("Invalid Crypto Pay webhook payload: %s", exc)
+        raise web.HTTPBadRequest() from exc
+    if not delivery:
+        return web.json_response({"ok": True})
+    if not telegram_bot:
+        raise web.HTTPServiceUnavailable()
+    if delivery["out_of_stock"]:
+        await telegram_bot.send_message(
+            delivery["customer_id"],
+            "Оплата получена, но товар закончился. Напишите в поддержку для возврата.",
+        )
+    else:
+        await telegram_bot.send_message(
+            delivery["customer_id"],
+            f"<b>Оплата получена ✅</b>\n\n<b>{html.escape(delivery['product_name'])}</b>\n\n"
+            f"<code>{html.escape(delivery['payload'])}</code>",
+        )
+    return web.json_response({"ok": True})
+
+
 async def start_health_server() -> web.AppRunner:
-    """Поднимает минимальный HTTP-сервер, не мешая Telegram polling."""
+    """Поднимает HTTP-сервер магазина и закрытой админ-панели."""
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_get("/admin", admin_page)
+    app.router.add_post("/api/admin/login", admin_login)
+    app.router.add_get("/api/admin/dashboard", admin_dashboard)
+    app.router.add_get("/api/admin/categories", admin_categories)
+    app.router.add_post("/api/admin/categories", admin_categories)
+    app.router.add_put("/api/admin/categories/{id}", admin_category)
+    app.router.add_get("/api/admin/products", admin_products)
+    app.router.add_post("/api/admin/products", admin_products)
+    app.router.add_put("/api/admin/products/{id}", admin_product)
+    app.router.add_delete("/api/admin/products/{id}", admin_product)
+    app.router.add_get("/api/admin/products/{id}/stock", admin_stock)
+    app.router.add_put("/api/admin/products/{id}/stock", admin_stock)
+    app.router.add_get("/api/admin/customers", admin_customers)
+    app.router.add_post("/api/admin/customers/{username}/balance", admin_grant_balance)
+    app.router.add_get("/api/admin/orders", admin_orders)
+    app.router.add_post("/api/payments/crypto/{secret}", crypto_webhook)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8000"))

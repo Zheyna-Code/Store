@@ -26,6 +26,10 @@ class Settings:
     warranty_url: str
     terms_url: str
     privacy_url: str
+    admin_secret: str
+    database_url: str
+    crypto_pay_token: str
+    crypto_pay_webhook_secret: str
 
 
 settings = Settings(
@@ -33,6 +37,10 @@ settings = Settings(
     warranty_url=os.getenv("WARRANTY_URL", ""),
     terms_url=os.getenv("TERMS_URL", ""),
     privacy_url=os.getenv("PRIVACY_URL", ""),
+    admin_secret=os.getenv("ADMIN_SECRET", ""),
+    database_url=os.getenv("DATABASE_URL", ""),
+    crypto_pay_token=os.getenv("CRYPTO_PAY_TOKEN", ""),
+    crypto_pay_webhook_secret=os.getenv("CRYPTO_PAY_WEBHOOK_SECRET", ""),
 )
 
 COVERS_DIR = BASE_DIR / "brand-covers"
