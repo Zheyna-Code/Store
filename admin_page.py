@@ -299,6 +299,36 @@ td .sub { color: var(--dim); font-size: 12px; }
 .emoji-field .btn,.emoji-pagination .btn,.emoji-picker-head .btn,.emoji-picker .btn,.emoji-intro .btn{min-height:44px}
 @media(max-width:900px){.emoji-settings-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.emoji-filters{grid-template-columns:1fr 1fr}.emoji-filters input{grid-column:1/-1}.emoji-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.emoji-picker{padding:18px;max-height:calc(100dvh - 24px)}.emoji-tile{height:56px}.emoji-intro{padding:20px}.emoji-field-info{min-width:185px}.emoji-picker code{font-size:14px;overflow-wrap:anywhere}}
+
+/* Centered product editor with a Telegram-like emoji tray on the right. */
+.product-dialog{display:flex;width:min(700px,100%);height:min(920px,calc(100dvh - 40px));border:1px solid var(--line-2);border-radius:24px;overflow:hidden;box-shadow:var(--shadow),0 30px 90px rgba(0,0,0,.6);transition:width .15s;background:rgba(17,17,20,.85)}
+.product-dialog.with-emojis{width:min(1080px,100%)}
+.product-main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.product-footer{display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;flex:0 0 auto;padding:12px 24px;border-top:1px solid var(--line);background:rgba(26,26,30,.9)}
+.product-footer .btn{min-height:44px}
+.product-dialog .product-form{width:auto;min-width:0;min-height:0;flex:1;border:0;height:auto;box-shadow:none;animation:pop .15s}
+.description-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:14px}
+.description-toolbar .btn{min-height:44px}
+.premium-editor{min-height:128px;max-height:340px;overflow:auto;width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.06);outline:none;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px;line-height:1.6}
+.premium-editor:focus{border-color:rgba(255,255,255,.6);box-shadow:0 0 0 3px rgba(255,255,255,.12)}
+.premium-editor:empty:before{content:attr(data-placeholder);color:var(--dim);pointer-events:none}
+.premium-inline{display:inline-block;width:1.5em;height:1.5em;vertical-align:middle;line-height:1;margin:0 2px;user-select:all}
+.premium-inline .emoji-thumb{width:100%;height:100%;font-size:1em;display:inline-flex}
+.premium-text{white-space:pre-wrap;overflow-wrap:anywhere;min-width:0;flex:1}
+.description-help{font-size:14px;margin-top:8px}
+.product-emoji-panel{width:340px;flex:0 0 340px;padding:20px;overflow-y:auto;overscroll-behavior:contain;border-left:1px solid var(--line);background:rgba(255,255,255,.025)}
+.emoji-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.emoji-panel-head h4{font-size:18px}.emoji-panel-head .btn{min-width:44px;min-height:44px}
+.product-emoji-panel p{font-size:14px;margin-bottom:12px}
+.product-emoji-panel input,.product-emoji-panel select{margin-bottom:12px;min-height:44px}
+.product-emoji-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;margin-bottom:16px}
+.product-emoji-grid .emoji-tile{height:46px;min-height:44px;border-radius:8px;background:transparent;border-color:transparent}
+.product-emoji-grid .emoji-tile:hover{background:rgba(255,255,255,.10)}
+.product-emoji-grid img{width:32px;height:32px;object-fit:contain}.product-emoji-grid img.repaint{filter:brightness(0) invert(1)}
+.loading-emoji{opacity:.35;cursor:wait}.unavailable-emoji{opacity:.35;cursor:not-allowed}
+.product-emoji-panel>.btn{width:100%;min-height:44px}
+@media(max-width:760px){.product-dialog{height:calc(100dvh - 24px);border-radius:18px}.product-dialog.with-emojis{flex-direction:column}.product-dialog.with-emojis .product-main{min-height:0}.product-emoji-panel{width:100%;flex:0 0 42%;border-left:0;border-top:1px solid var(--line);padding:16px}.product-emoji-grid{grid-template-columns:repeat(7,minmax(0,1fr))}.product-form{padding:18px}.product-emoji-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.product-emoji-panel>p{display:none}.product-emoji-filters input,.product-emoji-filters select{min-width:0}.product-footer{padding:10px 18px}}
+@media(prefers-reduced-motion:reduce){.product-dialog{transition:none}}
 </style></head><body>
 <section id="login" class="login"><div class="login-card"><div class="logo"><span class="mark"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg></span>Nexus Admin</div><h1>Управление магазином</h1><p class="muted">Введите секретный ключ администратора</p><form id="loginForm"><div><label class="lbl" for="secret">Секретный ключ</label><input id="secret" type="password" autocomplete="current-password" required></div><button class="btn primary" type="submit">Войти в панель →</button><p id="loginError" class="err" role="status" aria-live="polite"></p></form></div></section>
 <div class="app" id="app" hidden>
