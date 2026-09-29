@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from emoji_library import validate_emoji_id
+
 from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -23,6 +26,10 @@ def public_row(row: asyncpg.Record) -> dict[str, Any]:
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS shop_settings (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}'::jsonb
+);
 CREATE TABLE IF NOT EXISTS categories (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -30,6 +37,8 @@ CREATE TABLE IF NOT EXISTS categories (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS custom_emoji_id TEXT;
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS emoji_fallback TEXT NOT NULL DEFAULT '🛍';
 CREATE TABLE IF NOT EXISTS products (
     id BIGSERIAL PRIMARY KEY,
     category_id BIGINT REFERENCES categories(id) ON DELETE SET NULL,
@@ -193,17 +202,41 @@ class Database:
         return [public_row(row) for row in rows]
 
     async def active_categories(self) -> list[dict[str, Any]]:
-        rows = await self._pool().fetch("SELECT id, name FROM categories WHERE is_active ORDER BY sort_order, name")
+        rows = await self._pool().fetch("SELECT id, name, custom_emoji_id, emoji_fallback FROM categories WHERE is_active ORDER BY sort_order, name")
         return [dict(row) for row in rows]
 
     async def save_category(self, data: dict[str, Any], category_id: int | None = None) -> dict[str, Any]:
-        if category_id:
-            row = await self._pool().fetchrow("UPDATE categories SET name=$1, sort_order=$2, is_active=$3 WHERE id=$4 RETURNING *", data["name"], data.get("sort_order", 0), data.get("is_active", True), category_id)
+        # Older clients changing visibility/order must not erase the selected emoji.
+        has_emoji = "custom_emoji_id" in data
+        emoji_id = data.get("custom_emoji_id")
+        if emoji_id:
+            emoji_id = validate_emoji_id(emoji_id)
         else:
-            row = await self._pool().fetchrow("INSERT INTO categories(name, sort_order, is_active) VALUES($1,$2,$3) RETURNING *", data["name"], data.get("sort_order", 0), data.get("is_active", True))
+            emoji_id = None
+        fallback = str(data.get("emoji_fallback") or "🛍")[:16]
+        if category_id:
+            row = await self._pool().fetchrow("""UPDATE categories SET name=$1, sort_order=$2, is_active=$3,
+                custom_emoji_id=CASE WHEN $4 THEN $5 ELSE custom_emoji_id END,
+                emoji_fallback=CASE WHEN $4 THEN $6 ELSE emoji_fallback END
+                WHERE id=$7 RETURNING *""", data["name"], data.get("sort_order", 0), data.get("is_active", True),
+                has_emoji, emoji_id, fallback, category_id)
+        else:
+            row = await self._pool().fetchrow("""INSERT INTO categories(name,sort_order,is_active,custom_emoji_id,emoji_fallback)
+                VALUES($1,$2,$3,$4,$5) RETURNING *""", data["name"], data.get("sort_order", 0),
+                data.get("is_active", True), emoji_id, fallback)
         if not row:
             raise ValueError("Категория не найдена")
         return public_row(row)
+
+    async def emoji_settings(self) -> dict[str, str]:
+        value = await self._pool().fetchval("SELECT value FROM shop_settings WHERE key='emojis'")
+        return json.loads(value) if isinstance(value, str) else (value or {})
+
+    async def save_emoji_settings(self, values: dict[str, str]) -> dict[str, str]:
+        value = await self._pool().fetchval("""INSERT INTO shop_settings(key,value) VALUES('emojis',$1::jsonb)
+            ON CONFLICT(key) DO UPDATE SET value=shop_settings.value || EXCLUDED.value RETURNING value""",
+            json.dumps(values))
+        return json.loads(value) if isinstance(value, str) else value
 
     async def list_products(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("""SELECT p.*, c.name AS category_name,
@@ -213,7 +246,9 @@ class Database:
         return [public_row(row) for row in rows]
 
     async def product(self, product_id: int) -> dict[str, Any] | None:
-        row = await self._pool().fetchrow("SELECT * FROM products WHERE id=$1", product_id)
+        row = await self._pool().fetchrow("""SELECT p.*, c.name AS category_name, c.custom_emoji_id AS category_emoji_id,
+            c.emoji_fallback AS category_emoji_fallback FROM products p LEFT JOIN categories c ON c.id=p.category_id
+            WHERE p.id=$1""", product_id)
         return public_row(row) if row else None
 
     async def active_products(self) -> list[dict[str, Any]]:
