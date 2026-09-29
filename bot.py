@@ -33,6 +33,9 @@ from storage import Database
 from shop_emoji import DEFAULT_EMOJI, EMOJI_FALLBACKS, EMOJI_LABELS
 from emoji_library import EmojiLibrary, validate_emoji_id
 from rich_description import description_to_html
+from exchange_rates import ExchangeRates
+
+exchange_rates = ExchangeRates()
 
 emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.json")
 
@@ -86,6 +89,19 @@ def premium_emoji(emoji_id: str, fallback: str) -> str:
 
 def dollars(amount: str) -> str:
     return f"{premium_emoji(EMOJI['dollar'], '💵')} {Decimal(str(amount).replace(' ', '')):.2f}"
+
+
+async def payment_summary(amount: str) -> str:
+    """Show reference rubles only at checkout; the actual invoice is always USD."""
+    quote = await exchange_rates.quote()
+    usd_line = f"К оплате: <b>{dollars(amount)} USD</b>"
+    if quote is None:
+        return usd_line + "\n<i>Эквивалент в рублях временно недоступен. Счёт в USD.</i>"
+    rubles = f"{quote.rubles(amount):,.2f}".replace(",", " ").replace(".", ",")
+    date_label = ".".join(reversed(quote.effective_date.split("-")))
+    note = " · обновление курса временно недоступно" if quote.stale else ""
+    return (usd_line + f"\nВ рублях: ≈ <b>{rubles} ₽</b>\n"
+            f"<i>Курс ЦБ на {date_label}{note}. Эквивалент справочный, счёт в USD.</i>")
 
 
 def menu_keyboard() -> InlineKeyboardMarkup:
@@ -443,7 +459,7 @@ async def buy_product(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     await callback.message.answer(
-        f"<b>{html.escape(order['name'])}</b>\nК оплате: <b>{dollars(order['price'])}</b>\n\n"
+        f"<b>{html.escape(order['name'])}</b>\n{await payment_summary(order['price'])}\n\n"
         "После подтверждения оплаты товар будет выдан автоматически.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             premium_link_button("Оплатить через Crypto Pay", invoice["pay_url"], EMOJI["crypto"])
@@ -470,13 +486,13 @@ async def open_category(callback: CallbackQuery) -> None:
 async def choose_wallet_amount(callback: CallbackQuery) -> None:
     amount = callback.data.split(":", maxsplit=1)[1]
     await callback.answer("Сумма выбрана")
-    await show_payment_options(callback.message, dollars(amount))
+    await show_payment_options(callback.message, amount)
 
 
 async def show_payment_options(message: Message, amount: str) -> None:
     await message.delete()
     await message.answer(
-        f"<b>Пополнение на {amount}</b>\n\n"
+        f"<b>Пополнение</b>\n{await payment_summary(amount)}\n\n"
         f"Выберите способ оплаты {premium_emoji(EMOJI['card'], '💳')}",
         reply_markup=payment_keyboard(),
     )
@@ -500,25 +516,7 @@ async def receive_custom_amount(message: Message, state: FSMContext) -> None:
         await message.answer(f"Введите сумму числом от {dollars('0.01')} до {dollars('10 000')}.")
         return
     await state.clear()
-    await show_payment_options(message, dollars(f"{amount:.2f}"))
-
-
-@router.message(F.entities)
-async def get_custom_emoji_id(message: Message) -> None:
-    """Возвращает ID premium emoji, присланного владельцем в сообщении."""
-    emoji_ids = [
-        entity.custom_emoji_id
-        for entity in message.entities
-        if entity.type == "custom_emoji" and entity.custom_emoji_id
-    ]
-    if not emoji_ids:
-        return
-    ids_text = "\n".join(f"<code>{emoji_id}</code>" for emoji_id in dict.fromkeys(emoji_ids))
-    await message.answer(
-        "<b>ID premium emoji:</b>\n"
-        f"{ids_text}\n\n"
-        "Скопируйте ID в админке: «Эмодзи» или «Категории → Изменить → Эмодзи»."
-    )
+    await show_payment_options(message, f"{amount:.2f}")
 
 
 @router.callback_query(F.data == "link_not_set")
