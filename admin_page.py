@@ -270,6 +270,35 @@ td .sub { color: var(--dim); font-size: 12px; }
   .card, .kpi, .side, .modal, .drawer, .login-card { background: rgba(28,28,32,.92); }
 }
 
+
+/* Premium emoji library — same monochrome glass surfaces. */
+.emoji-thumb{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;flex:0 0 26px;vertical-align:middle;font-size:22px;border-radius:6px}
+.emoji-thumb img.repaint{filter:brightness(0) invert(1)}
+.emoji-thumb img{width:100%;height:100%;object-fit:contain}
+.emoji-thumb.large{width:44px;height:44px;flex-basis:44px;font-size:30px}
+.emoji-thumb.no-preview{border:1px dashed rgba(255,255,255,.45)}
+.emoji-field{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+.emoji-field-info{flex:1;min-width:160px}
+.emoji-field-info code{display:block;font-size:14px;letter-spacing:normal;color:#aeb2bb;overflow-wrap:anywhere;margin-top:4px}
+.emoji-setting{padding:20px}.emoji-setting h4{margin:0;font-size:16px}
+.emoji-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.emoji-intro{padding:24px;margin-bottom:20px}.emoji-intro h3{margin:0}
+.emoji-overlay{z-index:1100}.emoji-picker{width:min(780px,100%);max-height:calc(100dvh - 40px);overflow:auto}
+.emoji-picker-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.emoji-picker-head h3{margin:0}
+.emoji-filters{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px;margin-top:20px}
+.emoji-status{font-size:14px;min-height:42px}
+.emoji-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
+.emoji-tile{height:62px;min-width:0;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.04);color:white;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.emoji-tile:hover,.emoji-tile:focus-visible{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.55);outline:2px solid white;outline-offset:2px}
+.emoji-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
+.emoji-manual-preview{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px}
+.emoji-category-name{display:inline-flex;align-items:center;gap:10px}
+.telegram-product-preview{background:#182633;border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:20px;line-height:1.5;margin-top:12px;overflow-wrap:anywhere;font-size:16px}
+.telegram-product-preview>div{display:flex;gap:8px;align-items:flex-start;white-space:pre-wrap}
+.telegram-product-preview .preview-title{margin-bottom:20px}.telegram-product-preview .preview-description{margin-bottom:20px}
+.emoji-field .btn,.emoji-pagination .btn,.emoji-picker-head .btn,.emoji-picker .btn,.emoji-intro .btn{min-height:44px}
+@media(max-width:900px){.emoji-settings-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.emoji-filters{grid-template-columns:1fr 1fr}.emoji-filters input{grid-column:1/-1}.emoji-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.emoji-picker{padding:18px;max-height:calc(100dvh - 24px)}.emoji-tile{height:56px}.emoji-intro{padding:20px}.emoji-field-info{min-width:185px}.emoji-picker code{font-size:14px;overflow-wrap:anywhere}}
 </style></head><body>
 <section id="login" class="login"><div class="login-card"><div class="logo"><span class="mark"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg></span>Nexus Admin</div><h1>Управление магазином</h1><p class="muted">Введите секретный ключ администратора</p><form id="loginForm"><div><label class="lbl" for="secret">Секретный ключ</label><input id="secret" type="password" autocomplete="current-password" required></div><button class="btn primary" type="submit">Войти в панель →</button><p id="loginError" class="err" role="status" aria-live="polite"></p></form></div></section>
 <div class="app" id="app" hidden>
@@ -278,6 +307,7 @@ td .sub { color: var(--dim); font-size: 12px; }
 <button type="button" data-page="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>Обзор</button>
 <button type="button" data-page="products"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>Товары<span class="badge" id="badge-products" hidden></span></button>
 <button type="button" data-page="categories"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Категории</button>
+<button type="button" data-page="emojis"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 14s1 3 4 3 4-3 4-3M8 8h.01M16 8h.01"/></svg>Эмодзи</button>
 <button type="button" data-page="customers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>Покупатели</button>
 <button type="button" data-page="orders"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/></svg>Покупки<span class="badge" id="badge-orders" hidden></span></button>
 </nav><div class="spacer"></div>

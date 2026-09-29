@@ -6,7 +6,7 @@ const NS = "http://www.w3.org/2000/svg";
 let token = localStorage.getItem(TOKEN_KEY) || "";
 const LOW_STOCK = 2;
 const state = {
-  page: "dashboard", days: 30, categories: [], products: [], customers: [], orders: [], dashboard: null, analytics: null,
+  page: "dashboard", days: 30, categories: [], products: [], customers: [], orders: [], dashboard: null, analytics: null, emojiSettings: null,
   productSearch: "", productCategory: "", productFilter: "all",
   orderSearch: "", orderStatus: "", customerSearch: "", customerSort: "seen", autoRefresh: true,
 };
@@ -34,7 +34,7 @@ function s(tag, attrs, ...children) {
   return node;
 }
 const num = v => Number(v) || 0;
-const money = v => num(v).toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " ₽";
+const money = v => num(v).toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " $";
 const plural = (n, a, b, c) => { const m = Math.abs(n) % 100, k = m % 10; return m > 10 && m < 20 ? c : k === 1 ? a : k > 1 && k < 5 ? b : c; };
 const short = v => v >= 1e6 ? (v / 1e6).toFixed(1).replace(".0", "") + "М" : v >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0).replace(".0", "") + "к" : String(Math.round(v * 10) / 10);
 const lower = v => String(v ?? "").toLocaleLowerCase("ru-RU");
@@ -99,9 +99,9 @@ async function api(path, options = {}) {
 
 async function loadAll({ silent = false } = {}) {
   const tz = -new Date().getTimezoneOffset();
-  const names = ["dashboard", "categories", "products", "customers", "orders", "analytics"];
+  const names = ["dashboard", "categories", "products", "customers", "orders", "analytics", "emojiSettings"];
   const results = await Promise.allSettled([
-    api("/dashboard"), api("/categories"), api("/products"), api("/customers"), api("/orders"), api(`/analytics?days=${state.days}&tz=${tz}`),
+    api("/dashboard"), api("/categories"), api("/products"), api("/customers"), api("/orders"), api(`/analytics?days=${state.days}&tz=${tz}`), api("/emojis/settings"),
   ]);
   const unauthorized = results.find(r => r.status === "rejected" && r.reason.status === 401);
   if (unauthorized) throw unauthorized.reason;
@@ -155,7 +155,9 @@ function logout(message) {
   token = ""; localStorage.removeItem(TOKEN_KEY);
   $("app").hidden = true; $("login").hidden = false; $("secret").value = "";
   $("loginError").textContent = typeof message === "string" ? message : "";
-  closeTopOverlay();
+  while (closeOverlay) closeTopOverlay();
+  for (const value of emojiImageCache.values()) value.then(entry => URL.revokeObjectURL(entry.url)).catch(() => {});
+  emojiImageCache.clear();
 }
 
 /* ================================================================== графики == */
@@ -441,7 +443,7 @@ function renderProducts() {
   }
   search.addEventListener("input", () => { state.productSearch = search.value; refresh(); });
   tableCard.append(h("div", { class: "tscroll" }, h("table", { class: "resp" },
-    h("thead", {}, h("tr", {}, ["Товар", "Категория", "Цена, ₽", "Автовыдача", "На витрине", ""].map((t, i) => h("th", { class: i === 2 || i === 3 ? "num" : "" }, t)))), tbody)));
+    h("thead", {}, h("tr", {}, ["Товар", "Категория", "Цена, USD", "Автовыдача", "На витрине", ""].map((t, i) => h("th", { class: i === 2 || i === 3 ? "num" : "" }, t)))), tbody)));
   refresh();
   return h("div", {},
     h("div", { class: "toolbar" }, search, category, h("div", { class: "chips" }, chip("all", "Все"), chip("on", "Активные"), chip("off", "Скрытые"), chip("low", "Заканчиваются"), chip("out", "Закончились"), chip("nocat", "Без категории")), h("span", { class: "grow" }), countNode),
@@ -455,7 +457,7 @@ function productRow(p) {
     h("span", {}));
   const cell = (label, content, cls) => h("td", { dataset: { label }, class: cls || "" }, content);
   return h("tr", {},
-    cell("Товар", h("div", {}, h("div", { class: "name" }, p.name), p.description ? h("div", { class: "sub clip" }, p.description) : "")),
+    cell("Товар", h("div", {}, h("div", { class: "name emoji-category-name" }, emojiThumb(categoryEmoji(state.categories.find(c => c.id === p.category_id)).id, categoryEmoji(state.categories.find(c => c.id === p.category_id)).emoji), p.name), p.description ? h("div", { class: "sub clip" }, p.description) : "")),
     cell("Категория", p.category_name || h("span", { class: "pill yellow" }, "без категории")),
     cell("Цена", inlinePrice(p), "num"),
     cell("Автовыдача", h("div", { class: "cellflex" }, stockPill, `${p.stock_count} шт.`), "num"),
@@ -484,10 +486,24 @@ function openProduct(product) {
     save.disabled = false;
     if (ok) closeTopOverlay();
   });
+  const preview = h("div", { class: "telegram-product-preview" });
+  function drawPreview() {
+    const category = state.categories.find(c => String(c.id) === f.category.value);
+    const icon = categoryEmoji(category);
+    const roles = state.emojiSettings?.values || {};
+    preview.replaceChildren(
+      h("div", { class: "preview-title" }, emojiThumb(icon.id, icon.emoji), h("b", {}, f.name.value || "Название товара")),
+      h("div", { class: "preview-description" }, emojiThumb(roles.description || "5843843420468024653", "⭐️"), f.description.value || "Описание товара"),
+      h("div", {}, emojiThumb(roles.dollar || "5974217466270716579", "💵"), num(f.price.value).toFixed(2)),
+      h("div", {}, emojiThumb(roles.stock || "5877260593903177342", "⚙"), "В наличии: " + (p.stock_count || 0)));
+  }
+  [f.name, f.description, f.price, f.category].forEach(input => input.addEventListener("input", drawPreview));
+  drawPreview();
   const drawer = h("div", { class: "drawer", role: "dialog", "aria-modal": "true" },
     h("div", { class: "drawer-head" }, h("div", {}, h("p", { class: "eyebrow" }, isNew ? "Новый товар" : `Товар № ${p.id}`), h("h3", {}, isNew ? "Добавить товар" : p.name)),
       h("button", { class: "btn sm", type: "button", "aria-label": "Закрыть", onclick: closeTopOverlay }, "×")),
-    h("div", { class: "form-grid" }, field("Название", f.name, true), field("Категория", f.category), field("Цена, ₽", f.price), field("Описание", f.description, true)),
+    h("div", { class: "form-grid" }, field("Название", f.name, true), field("Категория", f.category), field("Цена, USD", f.price), field("Описание", f.description, true)),
+    h("div", { class: "section" }, h("h4", {}, "Как выглядит карточка в Telegram"), preview, h("p", { class: "muted" }, "Статичный предпросмотр. Эмодзи наследуется от категории, значки описания, цены и остатка — из раздела «Эмодзи». Цена в USD.")),
     h("div", { class: "section" }, h("div", { class: "toggle-row" }, h("div", {}, h("div", {}, "Показывать в каталоге"), h("div", { class: "sub dim" }, "Скрытый товар покупатели не видят"), ), h("label", { class: "switch" }, f.active, h("span", {})))),
     h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: closeTopOverlay }, "Отмена"), save));
   if (!isNew) {
@@ -547,9 +563,11 @@ function openCategory(category) {
   const name = h("input", { maxLength: 80, value: c.name, placeholder: "Например, ChatGPT" });
   const order = h("input", { type: "number", value: c.sort_order });
   const active = h("input", { type: "checkbox", checked: !!c.is_active });
+  let chosenEmoji = c.custom_emoji_id ? categoryEmoji(c) : null;
+  const emojiControl = emojiField(categoryEmoji(c), selected => { chosenEmoji = selected; }, { reset: () => categoryEmoji({ name: name.value }) });
   const submit = h("button", { class: "btn primary", type: "button" }, "Сохранить");
   const send = async () => {
-    const body = { name: name.value.trim(), sort_order: Number.parseInt(order.value, 10) || 0, is_active: active.checked };
+    const body = { name: name.value.trim(), sort_order: Number.parseInt(order.value, 10) || 0, is_active: active.checked, custom_emoji_id: chosenEmoji?.id || null, emoji_fallback: chosenEmoji?.emoji || "🛍" };
     if (!body.name) { toast("Название не может быть пустым.", "error"); return; }
     submit.disabled = true;
     const ok = await act(() => api(isNew ? "/categories" : "/categories/" + c.id, { method: isNew ? "POST" : "PUT", body }), "Категория сохранена.");
@@ -562,6 +580,8 @@ function openCategory(category) {
     h("h3", {}, isNew ? "Новая категория" : "Изменить категорию"),
     h("div", { style: "margin-top:12px" }, h("label", { class: "lbl" }, "Название"), name),
     h("div", { style: "margin-top:12px" }, h("label", { class: "lbl" }, "Порядок показа"), order),
+    h("div", { style: "margin-top:16px" }, h("label", { class: "lbl" }, "Эмодзи категории и всех её товаров"), emojiControl,
+      h("p", { class: "muted" }, "Товары наследуют этот значок в списке и карточке. Пустое значение использует исходный логотип категории.")),
     h("div", { class: "toggle-row" }, h("span", {}, "Показывать в каталоге"), h("label", { class: "switch" }, active, h("span", {}))),
     h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: closeTopOverlay }, "Отмена"), submit)), { center: true });
   name.focus();
@@ -577,7 +597,7 @@ function renderCategories() {
     const toggle = h("label", { class: "switch" }, h("input", { type: "checkbox", checked: !!c.is_active, "aria-label": "Показывать",
       onchange: event => act(() => api("/categories/" + c.id, { method: "PUT", body: { ...body(c), is_active: event.target.checked } }), `«${c.name}»: ${event.target.checked ? "показана" : "скрыта"}`) }), h("span", {}));
     const cell = (label, content, cls) => h("td", { dataset: { label }, class: cls || "" }, content);
-    return h("tr", {}, cell("Название", h("span", { class: "name" }, c.name)), cell("Товаров", count, "num"), cell("Порядок", order, "num"), cell("В каталоге", toggle),
+    return h("tr", {}, cell("Название", h("span", { class: "name emoji-category-name" }, emojiThumb(categoryEmoji(c).id, categoryEmoji(c).emoji), c.name)), cell("Товаров", count, "num"), cell("Порядок", order, "num"), cell("В каталоге", toggle),
       h("td", { class: "act" }, h("div", { class: "row-actions" }, h("button", { class: "btn sm", type: "button", onclick: () => openCategory(c) }, "Изменить"))));
   });
   return h("div", { class: "card table-card" }, h("div", { class: "tscroll" }, h("table", { class: "resp" },
@@ -629,7 +649,7 @@ async function grant(target, amount, label) {
 }
 function openTopup(customer) {
   const who = h("input", { placeholder: "@username или Telegram ID", value: customer ? (customer.username ? "@" + customer.username : customer.telegram_id) : "" });
-  const amount = h("input", { type: "number", min: 0, step: "0.01", placeholder: "Сумма, ₽" });
+  const amount = h("input", { type: "number", min: 0, step: "0.01", placeholder: "Сумма, USD" });
   const submit = h("button", { class: "btn primary", type: "button" }, "Пополнить");
   const send = async () => {
     const raw = who.value.trim().replace(/^@/, ""), sum = num(amount.value);
@@ -646,8 +666,8 @@ function openTopup(customer) {
     h("h3", {}, customer ? `Пополнить баланс: ${customer.first_name || clientName(customer)}` : "Пополнить баланс"),
     customer ? h("p", { class: "muted" }, `Сейчас на балансе ${money(customer.balance)}`) : h("p", { class: "muted" }, "Покупатель должен уже запускать бота."),
     h("div", { style: "margin-top:12px" }, h("label", { class: "lbl" }, "Покупатель"), who),
-    h("div", { class: "presets" }, [100, 250, 500, 1000, 1500].map(v => h("button", { class: "btn sm", type: "button", onclick: () => { amount.value = v; amount.focus(); } }, "+" + v))),
-    h("label", { class: "lbl" }, "Сумма, ₽"), amount,
+    h("div", { class: "presets" }, [1, 3, 5, 10, 25].map(v => h("button", { class: "btn sm", type: "button", onclick: () => { amount.value = v; amount.focus(); } }, "+" + v))),
+    h("label", { class: "lbl" }, "Сумма, USD"), amount,
     h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: closeTopOverlay }, "Отмена"), submit)), { center: true });
   (customer ? amount : who).focus();
 }
@@ -683,7 +703,161 @@ function customerRow(c) {
     cell("Покупатель", h("div", {}, h("div", { class: "name" }, c.first_name || "—"), c.username ? h("div", { class: "sub" }, "@" + c.username) : "")),
     cell("Telegram ID", h("span", { class: "dim" }, c.telegram_id)), cell("Баланс", money(c.balance), "num"), cell("Покупок", c.purchases, "num"),
     cell("Был в боте", fmtDate(c.last_seen_at)),
-    h("td", { class: "act" }, h("div", { class: "row-actions" }, quick(500), quick(1000), h("button", { class: "btn primary sm", type: "button", onclick: () => openTopup(c) }, "Другая сумма"))));
+    h("td", { class: "act" }, h("div", { class: "row-actions" }, quick(5), quick(10), h("button", { class: "btn primary sm", type: "button", onclick: () => openTopup(c) }, "Другая сумма"))));
+}
+
+/* ============================================================= premium emoji == */
+let emojiCatalog = null;
+let emojiCatalogPromise = null;
+const emojiImageCache = new Map();
+let previewActive = 0;
+const previewQueue = [];
+function schedulePreview(task) {
+  return new Promise((resolve, reject) => {
+    previewQueue.push(async () => { try { resolve(await task()); } catch (e) { reject(e); } });
+    drainPreviews();
+  });
+}
+function drainPreviews() {
+  while (previewActive < 4 && previewQueue.length) {
+    previewActive++;
+    previewQueue.shift()().finally(() => { previewActive--; drainPreviews(); });
+  }
+}
+async function loadEmojiCatalog() {
+  if (emojiCatalog) return emojiCatalog;
+  if (!emojiCatalogPromise) emojiCatalogPromise = api('/emojis/catalog').then(rows => { emojiCatalog = rows; return rows; }).finally(() => { emojiCatalogPromise = null; });
+  return emojiCatalogPromise;
+}
+async function emojiImageUrl(id) {
+  if (emojiImageCache.has(id)) return emojiImageCache.get(id);
+  const request = schedulePreview(async () => {
+    const response = await fetch('/api/admin/emojis/image/' + encodeURIComponent(id), { headers: { 'X-Admin-Token': token } });
+    if (!response.ok) throw new Error('Нет предпросмотра');
+    const url = URL.createObjectURL(await response.blob());
+    return { url, repaint: response.headers.get('X-Emoji-Repainting') === 'true' };
+  });
+  emojiImageCache.set(id, request);
+  request.catch(() => emojiImageCache.delete(id));
+  if (emojiImageCache.size > 256) {
+    const first = emojiImageCache.keys().next().value;
+    const old = emojiImageCache.get(first); emojiImageCache.delete(first);
+    old.then(value => URL.revokeObjectURL(value.url)).catch(() => {});
+  }
+  return request;
+}
+function emojiThumb(id, fallback = '◌', large = false) {
+  const node = h('span', { class: 'emoji-thumb' + (large ? ' large' : ''), title: 'ID: ' + id }, fallback);
+  // Actual Telegram image, not the catalog's ordinary Unicode fallback.
+  emojiImageUrl(id).then(({ url, repaint }) => {
+    if (!node.isConnected) return;
+    const image = h('img', { src: url, alt: 'Premium emoji ' + id, class: repaint ? 'repaint' : '' });
+    image.addEventListener('error', () => { node.replaceChildren(fallback); node.title = 'Нет предпросмотра · ID: ' + id; });
+    node.replaceChildren(image);
+  }).catch(() => { node.title = 'Предпросмотр недоступен · ID: ' + id; node.classList.add('no-preview'); });
+  return node;
+}
+function categoryEmoji(c) {
+  return c && c.custom_emoji_id ? { id: c.custom_emoji_id, emoji: c.emoji_fallback || '🛍' }
+    : (state.emojiSettings?.categories?.[lower(c?.name).trim()] || { id: state.emojiSettings?.values?.catalog || '5983399041197675256', emoji: '🛍' });
+}
+function emojiField(initial, onChange, { reset } = {}) {
+  let value = initial;
+  const box = h('div', { class: 'emoji-field' });
+  function draw() {
+    box.replaceChildren(emojiThumb(value.id, value.emoji, true),
+      h('div', { class: 'emoji-field-info' }, h('div', {}, 'Premium emoji'), h('code', {}, value.id)),
+      h('button', { class: 'btn', type: 'button', onclick: () => openEmojiPicker(chosen => { value = chosen; onChange(chosen); draw(); }) }, 'Выбрать'));
+    if (reset) box.append(h('button', { class: 'btn sm', type: 'button', onclick: () => { value = reset(); onChange(null); draw(); } }, 'По умолчанию'));
+  }
+  draw(); return box;
+}
+async function openEmojiPicker(onSelect) {
+  // A nested picker must not destroy unsaved category/product fields.
+  const parentClose = closeOverlay;
+  const close = () => { overlay.remove(); closeOverlay = parentClose; };
+  const grid = h('div', { class: 'emoji-grid', 'aria-label': 'Каталог премиум-эмодзи' });
+  const status = h('p', { class: 'muted emoji-status', role: 'status' }, 'Загружаем каталог…');
+  const search = h('input', { type: 'search', placeholder: 'Поиск: эмодзи, ID, тип', 'aria-label': 'Поиск эмодзи' });
+  const pack = h('select', { 'aria-label': 'Набор эмодзи' });
+  const group = h('select', { 'aria-label': 'Тип эмодзи' });
+  const manual = h('input', { placeholder: 'ID или разметка Telegram', 'aria-label': 'ID эмодзи', inputMode: 'text' });
+  const manualView = h('div', { class: 'emoji-manual-preview' });
+  const previous = h('button', { class: 'btn', type: 'button' }, '← Назад');
+  const next = h('button', { class: 'btn', type: 'button' }, 'Далее →');
+  const pageInfo = h('span', { class: 'dim' });
+  const box = h('div', { class: 'modal emoji-picker', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Выбор премиум-эмодзи' },
+    h('div', { class: 'emoji-picker-head' }, h('h3', {}, 'Премиум-эмодзи'), h('button', { class: 'btn sm', type: 'button', 'aria-label': 'Закрыть выбор эмодзи', onclick: close }, '×')),
+    h('p', { class: 'muted' }, 'Настоящие статичные миниатюры из Telegram. Если превью недоступно, значок помечен пунктиром — это обычная замена, не оригинал.'),
+    h('div', { class: 'emoji-filters' }, search, pack, group), status, grid,
+    h('div', { class: 'emoji-pagination' }, previous, pageInfo, next),
+    h('div', { class: 'section' }, h('label', { class: 'lbl' }, 'Свой эмодзи'), manual,
+      h('p', { class: 'muted' }, 'Отправьте эмодзи боту — он вернёт ID. Можно вставить ID, tg-emoji или custom-emoji-element.'),
+      h('button', { class: 'btn', type: 'button', onclick: inspectManual }, 'Показать предпросмотр'), manualView));
+  const overlay = h('div', { class: 'overlay center emoji-overlay', onmousedown: e => { if (e.target === overlay) close(); } }, box);
+  document.body.append(overlay); closeOverlay = close; search.focus();
+  let rows = [], currentPage = 0, generation = 0;
+  const size = 48;
+  const groupNames = { general: 'Общие', finance: 'Финансы', navigation: 'Навигация', documents: 'Документы', media: 'Медиа', tech: 'Технологии', status: 'Статусы' };
+  function draw() {
+    const gen = ++generation;
+    const q = lower(search.value).trim();
+    const filtered = rows.filter(e => (!pack.value || e.pack === pack.value) && (!group.value || e.category === group.value) &&
+      (!q || lower([e.id, e.emoji, e.pack, e.category, groupNames[e.category] || ''].join(' ')).includes(q)));
+    const pages = Math.max(1, Math.ceil(filtered.length / size)); currentPage = Math.min(currentPage, pages - 1);
+    const visible = filtered.slice(currentPage * size, (currentPage + 1) * size);
+    previous.disabled = !currentPage; next.disabled = currentPage + 1 >= pages;
+    pageInfo.textContent = `${currentPage + 1} / ${pages}`;
+    status.textContent = `Найдено: ${filtered.length}. Нажмите на эмодзи, чтобы выбрать. Порядок внутри набора сохранён.`;
+    grid.replaceChildren();
+    if (!visible.length) { grid.append(h('p', { class: 'muted' }, 'Ничего не найдено. Попробуйте другой фильтр или вставьте ID.')); return; }
+    // Batch metadata once per visible page; files load four at a time and are cached.
+    api('/emojis/previews', { method: 'POST', body: { ids: visible.map(e => e.id) } }).then(() => {}).catch(() => {
+      if (gen === generation && overlay.isConnected) status.textContent = 'Telegram не отдаёт превью. Пунктирные значки — обычные замены. Повторите позже.';
+    });
+    grid.append(...visible.map(e => h('button', { class: 'emoji-tile', type: 'button', title: `${e.pack} · ${e.emoji} · ${e.id}`, 'aria-label': `Выбрать ${e.emoji}, ID ${e.id}`,
+      onclick: () => { close(); onSelect(e); } }, emojiThumb(e.id, e.emoji, true))));
+  }
+  async function inspectManual() {
+    const raw = manual.value.trim();
+    const tagId = raw.match(/(?:emoji-id|data-doc-id)\s*=\s*["'](\d+)["']/);
+    const id = tagId ? tagId[1] : raw;
+    if (!/^[1-9][0-9]{0,19}$/.test(id)) { manualView.replaceChildren(h('p', { class: 'muted' }, 'Введите ID из 1–20 цифр или разметку Telegram.')); return; }
+    manualView.textContent = 'Проверяем в Telegram…';
+    try {
+      const meta = (await api('/emojis/previews', { method: 'POST', body: { ids: [id] } }))[id];
+      if (!meta?.available) throw new Error('Telegram не нашёл этот эмодзи. Проверьте ID.');
+      const chosen = { id, emoji: meta.emoji || '◌', pack: meta.pack || '' };
+      manualView.replaceChildren(emojiThumb(id, chosen.emoji, true), h('code', {}, id),
+        h('button', { class: 'btn primary', type: 'button', onclick: () => { close(); onSelect(chosen); } }, 'Использовать'));
+    } catch (e) { manualView.replaceChildren(h('p', { class: 'muted' }, e.message)); }
+  }
+  search.addEventListener('input', () => { currentPage = 0; draw(); });
+  pack.addEventListener('change', () => { currentPage = 0; draw(); });
+  group.addEventListener('change', () => { currentPage = 0; draw(); });
+  previous.addEventListener('click', () => { currentPage--; draw(); }); next.addEventListener('click', () => { currentPage++; draw(); });
+  try {
+    rows = await loadEmojiCatalog();
+    if (!overlay.isConnected) return;
+    pack.append(h('option', { value: '' }, 'Все наборы'), ...[...new Set(rows.map(e => e.pack))].map(v => h('option', { value: v }, v)));
+    group.append(h('option', { value: '' }, 'Все типы'), ...[...new Set(rows.map(e => e.category))].map(v => h('option', { value: v }, groupNames[v] || v)));
+    draw();
+  } catch (e) { status.textContent = e.message; }
+}
+function renderEmojis() {
+  const settings = state.emojiSettings;
+  if (!settings) return h('div', { class: 'card empty' }, 'Не удалось загрузить настройки эмодзи. Нажмите «Обновить».');
+  const priority = ['description', 'dollar', 'stock'];
+  const keys = [...priority, ...Object.keys(settings.labels).filter(k => !priority.includes(k))];
+  const cards = keys.map(key => h('div', { class: 'card emoji-setting' }, h('h4', {}, settings.labels[key]),
+    emojiField({ id: settings.values[key], emoji: key === 'stock' ? '⚙' : key === 'dollar' ? '💵' : '◌' }, async chosen => {
+      await act(() => api('/emojis/settings', { method: 'PUT', body: { [key]: chosen?.id || settings.defaults[key] } }), 'Эмодзи сохранён. Бот применит его на следующем экране.');
+    }, { reset: () => ({ id: settings.defaults[key], emoji: '◌' }) })));
+  return h('div', {}, h('div', { class: 'card emoji-intro' }, h('h3', {}, 'Эмодзи магазина'),
+    h('p', { class: 'muted' }, 'Значок категории задаётся в «Категории → Изменить». Все товары наследуют его автоматически. Здесь — значки карточки и интерфейса.'),
+    h('p', { class: 'muted' }, 'Карточка: эмодзи категории + название → звезда + описание → доллар + цена → шестерёнка + остаток.'),
+    h('button', { class: 'btn', type: 'button', onclick: () => openEmojiPicker(e => { navigator.clipboard?.writeText(e.id).then(() => toast('ID скопирован: ' + e.id)).catch(() => toast('ID: ' + e.id)); }) }, 'Открыть каталог и скопировать ID')),
+    h('div', { class: 'emoji-settings-grid' }, cards));
 }
 
 /* ==================================================================== каркас == */
@@ -691,6 +865,7 @@ const PAGES = {
   dashboard: { title: "Обзор магазина", render: renderDashboard },
   products: { title: "Товары", render: renderProducts },
   categories: { title: "Категории", render: renderCategories },
+  emojis: { title: "Премиум-эмодзи", render: renderEmojis },
   customers: { title: "Покупатели", render: renderCustomers },
   orders: { title: "Покупки", render: renderOrders },
 };

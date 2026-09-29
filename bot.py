@@ -30,6 +30,10 @@ from aiogram.types import (
 from config import COVERS_DIR, settings
 from admin_page import ADMIN_HTML
 from storage import Database
+from shop_emoji import DEFAULT_EMOJI, EMOJI_FALLBACKS, EMOJI_LABELS
+from emoji_library import EmojiLibrary, validate_emoji_id
+
+emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.json")
 
 router = Router()
 database: Database | None = None
@@ -47,39 +51,7 @@ class WalletState(StatesGroup):
     waiting_for_amount = State()
 
 
-EMOJI = {
-    # Интерфейсные emoji из curated_packs.json. Иконки AI-категорий ниже не меняем.
-    "catalog": "5983399041197675256",
-    "wallet": "5769403330761593044",
-    "bonus": "5985472565508838112",
-    "support": "5891169510483823323",
-    "other": "5843843420468024653",
-    "wave": "5906995262378741881",
-    "chatgpt": "6134246530380472478",
-    "claude": "6131771460986872161",
-    "notion": "5364199932620194408",
-    "duolingo": "5796371348808799072",
-    "netflix": "5796522630441867305",
-    "spotify": "5796304385973686816",
-    "grok": "6179337489350663129",
-    "capcut": "5267309292943331240",
-    "perplexity": "5321199630585732877",
-    "gemini": "5321197740800120767",
-    "dollar": "5974217466270716579",
-    "write": "5879841310902324730",
-    "link": "5891169510483823323",
-    "crypto": "5927169041595634481",
-    "admin_payment": "5920052658743283381",
-    "profile": "5886412370347036129",
-    "friends": "5944970130554359187",
-    "card": "5927169041595634481",
-    "document": "5839323457015256759",
-    "food": "5875271289605722323",
-    "candy": "5987565374223159187",
-    "new": "5886306834410640699",
-    "back": "5875082500023258804",
-    "plane": "5875465628285931233",
-}
+EMOJI = dict(DEFAULT_EMOJI)
 
 
 def button(text: str, callback_data: str, *, style: str = "primary") -> InlineKeyboardButton:
@@ -107,11 +79,12 @@ def premium_link_button(text: str, url: str, emoji_id: str, *, style: str = "pri
 
 def premium_emoji(emoji_id: str, fallback: str) -> str:
     """HTML-разметка premium emoji для текста и подписей."""
-    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+    fallback = EMOJI_FALLBACKS.get(emoji_id, fallback)
+    return f'<tg-emoji emoji-id="{emoji_id}">{html.escape(fallback)}</tg-emoji>'
 
 
 def dollars(amount: str) -> str:
-    return f"{premium_emoji(EMOJI['dollar'], '💵')}{amount}"
+    return f"{premium_emoji(EMOJI['dollar'], '💵')} {Decimal(str(amount).replace(' ', '')):.2f}"
 
 
 def menu_keyboard() -> InlineKeyboardMarkup:
@@ -173,7 +146,7 @@ def shop_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
         [premium_button(
             category["name"],
             f"category:{category['id']}",
-            CATEGORY_EMOJI.get(category["name"].lower(), (EMOJI["catalog"], ""))[0],
+            category_icon(category)[0],
         )]
         for category in categories
     ]
@@ -246,6 +219,34 @@ CATEGORY_EMOJI: dict[str, tuple[str, str]] = {
 }
 
 
+def category_icon(category: dict) -> tuple[str, str]:
+    if category.get("custom_emoji_id"):
+        return category["custom_emoji_id"], category.get("emoji_fallback") or "🛍"
+    return CATEGORY_EMOJI.get((category.get("name") or "").strip().lower(), (EMOJI["catalog"], "🛍"))
+
+
+def apply_emoji_settings(values: dict) -> None:
+    EMOJI.clear()
+    EMOJI.update(DEFAULT_EMOJI)
+    EMOJI.update({k: v for k, v in values.items() if k in DEFAULT_EMOJI})
+    # SCREENS are initially constructed on import; rebuild keyboards after a settings change.
+    for key, builder in {"menu": menu_keyboard, "wallet": wallet_keyboard,
+                         "bonus": back_keyboard, "support": support_keyboard, "other": other_keyboard}.items():
+        filename, caption, _ = SCREENS[key]
+        SCREENS[key] = (filename, caption, builder())
+
+
+def product_card(product: dict, available: int) -> str:
+    emoji_id, fallback = category_icon({"name": product.get("category_name"),
+        "custom_emoji_id": product.get("category_emoji_id"), "emoji_fallback": product.get("category_emoji_fallback")})
+    return (
+        f"{premium_emoji(emoji_id, fallback)} <b>{html.escape(product['name'])}</b>\n\n"
+        f"{premium_emoji(EMOJI['description'], '⭐️')} {html.escape(product['description'])}\n\n"
+        f"{dollars(product['price'])}\n"
+        f"{premium_emoji(EMOJI['stock'], '⚙')} В наличии: <b>{available}</b>"
+    )
+
+
 async def replace_with_screen(message: Message, screen: str, first_name: str = "друг") -> None:
     """Удаляет прошлый экран и присылает новый с нужной обложкой."""
     filename, caption, keyboard = SCREENS[screen]
@@ -280,15 +281,15 @@ async def show_category(message: Message, category_id: int) -> None:
     filename = CATEGORIES.get(title.lower(), (None, title))[0]
     products = await get_database().category_products(category_id)
     await message.delete()
-    emoji_id, fallback = CATEGORY_EMOJI.get(title.lower(), (EMOJI["catalog"], "🛍"))
+    emoji_id, fallback = category_icon(category)
     caption = (
-        f"<b>{html.escape(title)}</b> {premium_emoji(emoji_id, fallback)}\n\n"
+        f"{premium_emoji(emoji_id, fallback)} <b>{html.escape(title)}</b>\n\n"
         + ("Выберите товар из списка ниже." if products else "В этой категории пока нет товаров.")
     )
     rows = [[premium_button(
-        f"{p['name']} · {p['price']} ₽" + (" · нет в наличии" if not p["stock_count"] else ""),
+        f"{p['name']} · ${Decimal(p['price']):.2f}" + (" · нет в наличии" if not p["stock_count"] else ""),
         f"product:{p['id']}",
-        EMOJI["document"],
+        emoji_id,
     )] for p in products]
     rows.append([premium_button("Назад к категориям", "catalog", EMOJI["back"], style="danger")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -345,7 +346,7 @@ async def open_profile(callback: CallbackQuery, state: FSMContext) -> None:
     caption = (
         f"<b>Профиль</b> {premium_emoji(EMOJI['profile'], '👤')}\n\n"
         f"{username} | <code>{user.id}</code>\n\n"
-        f"Баланс: <b>{customer['balance'] if customer else '0.00'}</b> {premium_emoji(EMOJI['dollar'], '💵')}\n"
+        f"Баланс: <b>{dollars(str(customer['balance']) if customer else '0.00')}</b>\n"
         f"Рефералов: <b>0</b> {premium_emoji(EMOJI['friends'], '👥')}\n"
         f"Покупок: <b>0</b> {premium_emoji(EMOJI['card'], '💳')}"
     )
@@ -384,8 +385,7 @@ async def open_product(callback: CallbackQuery) -> None:
     available = sum(not item["is_issued"] for item in stock)
     await callback.answer()
     await callback.message.answer(
-        f"<b>{html.escape(product['name'])}</b>\n\n{html.escape(product['description'])}\n\n"
-        f"Цена: <b>{product['price']} ₽</b>\nВ наличии: <b>{available}</b>",
+        product_card(product, available),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             *([[premium_button("Купить через Crypto Pay", f"buy:{product_id}", EMOJI["crypto"], style="success")]] if available else []),
             [premium_button(
@@ -399,10 +399,10 @@ async def open_product(callback: CallbackQuery) -> None:
 
 
 async def create_crypto_invoice(order: dict) -> dict:
-    """Creates a fiat RUB Crypto Pay invoice; the API token never reaches a client."""
+    """Creates a fiat USD Crypto Pay invoice; the API token never reaches a client."""
     request_data = {
         "currency_type": "fiat",
-        "fiat": "RUB",
+        "fiat": "USD",
         "accepted_assets": "USDT,TON",
         "amount": order["price"],
         "description": order["name"][:1024],
@@ -442,7 +442,7 @@ async def buy_product(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     await callback.message.answer(
-        f"<b>{html.escape(order['name'])}</b>\nК оплате: <b>{order['price']} ₽</b>\n\n"
+        f"<b>{html.escape(order['name'])}</b>\nК оплате: <b>{dollars(order['price'])}</b>\n\n"
         "После подтверждения оплаты товар будет выдан автоматически.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             premium_link_button("Оплатить через Crypto Pay", invoice["pay_url"], EMOJI["crypto"])
@@ -516,7 +516,7 @@ async def get_custom_emoji_id(message: Message) -> None:
     await message.answer(
         "<b>ID premium emoji:</b>\n"
         f"{ids_text}\n\n"
-        "Скопируйте ID и пришлите его сюда — я добавлю emoji в нужное место меню."
+        "Скопируйте ID в админке: «Эмодзи» или «Категории → Изменить → Эмодзи»."
     )
 
 
@@ -535,6 +535,7 @@ async def main() -> None:
     global database, telegram_bot
     database = Database(settings.database_url)
     await database.connect()
+    apply_emoji_settings(await database.emoji_settings())
     bot = Bot(token=settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     telegram_bot = bot
     dispatcher = Dispatcher()
@@ -652,6 +653,61 @@ async def admin_stock(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)}, status=404)
 
 
+async def admin_emoji_settings(request: web.Request) -> web.Response:
+    require_admin(request)
+    if request.method == "PUT":
+        data = await json_body(request)
+        if not isinstance(data, dict) or set(data) - set(EMOJI_LABELS):
+            return web.json_response({"error": "Неизвестная настройка эмодзи"}, status=400)
+        try:
+            values = {key: validate_emoji_id(value) for key, value in data.items()}
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        for emoji_id in values.values():
+            sticker = emoji_library.metadata.get(emoji_id)
+            if sticker and sticker.emoji:
+                EMOJI_FALLBACKS[emoji_id] = sticker.emoji
+        saved = await get_database().save_emoji_settings(values)
+        apply_emoji_settings(saved)
+    return web.json_response({"values": {k: EMOJI[k] for k in EMOJI_LABELS}, "labels": EMOJI_LABELS, "defaults": {k: DEFAULT_EMOJI[k] for k in EMOJI_LABELS},
+        "categories": {k: {"id": v[0], "emoji": v[1]} for k, v in CATEGORY_EMOJI.items()}})
+
+
+async def admin_emoji_catalog(request: web.Request) -> web.Response:
+    require_admin(request)
+    return web.json_response(emoji_library.items)
+
+
+async def admin_emoji_previews(request: web.Request) -> web.Response:
+    require_admin(request)
+    data = await json_body(request)
+    ids = data.get("ids") if isinstance(data, dict) else None
+    if not isinstance(ids, list) or len(ids) > 60:
+        return web.json_response({"error": "Нужно не больше 60 ID"}, status=400)
+    try:
+        ids = list(dict.fromkeys(validate_emoji_id(value) for value in ids))
+        if not telegram_bot:
+            raise RuntimeError("Бот ещё не подключён")
+        return web.json_response(await emoji_library.previews(telegram_bot, ids))
+    except (ValueError, RuntimeError):
+        return web.json_response({"error": "Не удалось загрузить предпросмотр. Проверьте ID и подключение бота."}, status=400)
+    except Exception:
+        # Telegram file URLs contain BOT_TOKEN: never log or expose raw exception text.
+        return web.json_response({"error": "Telegram временно не отдаёт предпросмотр. Повторите позже."}, status=502)
+
+
+async def admin_emoji_image(request: web.Request) -> web.Response:
+    require_admin(request)
+    try:
+        emoji_id = validate_emoji_id(request.match_info["id"])
+        if not telegram_bot:
+            raise RuntimeError
+        content, mime = await emoji_library.image(telegram_bot, emoji_id)
+        return web.Response(body=content, content_type=mime, headers={"Cache-Control": "private, max-age=3600", "X-Emoji-Repainting": str(bool(emoji_library.metadata.get(emoji_id) and emoji_library.metadata[emoji_id].needs_repainting)).lower()})
+    except Exception:
+        return web.json_response({"error": "Предпросмотр недоступен"}, status=404)
+
+
 async def admin_customers(request: web.Request) -> web.Response:
     require_admin(request)
     return web.json_response(await get_database().customers(request.query.get("q", "")))
@@ -751,6 +807,11 @@ async def start_health_server() -> web.AppRunner:
     app.router.add_post("/api/admin/customers/{username}/balance", admin_grant_balance)
     app.router.add_post("/api/admin/customers/id/{telegram_id}/balance", admin_grant_balance_by_id)
     app.router.add_get("/api/admin/orders", admin_orders)
+    app.router.add_get("/api/admin/emojis/settings", admin_emoji_settings)
+    app.router.add_put("/api/admin/emojis/settings", admin_emoji_settings)
+    app.router.add_get("/api/admin/emojis/catalog", admin_emoji_catalog)
+    app.router.add_post("/api/admin/emojis/previews", admin_emoji_previews)
+    app.router.add_get("/api/admin/emojis/image/{id}", admin_emoji_image)
     app.router.add_post("/api/payments/crypto/{secret}", crypto_webhook)
     runner = web.AppRunner(app)
     await runner.setup()
