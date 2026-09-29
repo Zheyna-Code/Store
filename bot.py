@@ -32,6 +32,7 @@ from admin_page import ADMIN_HTML
 from storage import Database
 from shop_emoji import DEFAULT_EMOJI, EMOJI_FALLBACKS, EMOJI_LABELS
 from emoji_library import EmojiLibrary, validate_emoji_id
+from rich_description import description_to_html
 
 emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.json")
 
@@ -241,7 +242,7 @@ def product_card(product: dict, available: int) -> str:
         "custom_emoji_id": product.get("category_emoji_id"), "emoji_fallback": product.get("category_emoji_fallback")})
     return (
         f"{premium_emoji(emoji_id, fallback)} <b>{html.escape(product['name'])}</b>\n\n"
-        f"{premium_emoji(EMOJI['description'], '⭐️')} {html.escape(product['description'])}\n\n"
+        f"{premium_emoji(EMOJI['description'], '⭐️')} {description_to_html(product['description'])}\n\n"
         f"{dollars(product['price'])}\n"
         f"{premium_emoji(EMOJI['stock'], '⚙')} В наличии: <b>{available}</b>"
     )

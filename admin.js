@@ -389,7 +389,7 @@ function renderDashboard() {
 /* ==================================================================== товары == */
 function productMatches(p) {
   const q = lower(state.productSearch.trim());
-  if (q && !lower(p.name + " " + p.description).includes(q)) return false;
+  if (q && !lower(p.name + " " + plainPremiumText(p.description)).includes(q)) return false;
   if (state.productCategory && String(p.category_id) !== state.productCategory) return false;
   switch (state.productFilter) {
     case "on": return !!p.is_active;
@@ -457,12 +457,141 @@ function productRow(p) {
     h("span", {}));
   const cell = (label, content, cls) => h("td", { dataset: { label }, class: cls || "" }, content);
   return h("tr", {},
-    cell("Товар", h("div", {}, h("div", { class: "name emoji-category-name" }, emojiThumb(categoryEmoji(state.categories.find(c => c.id === p.category_id)).id, categoryEmoji(state.categories.find(c => c.id === p.category_id)).emoji), p.name), p.description ? h("div", { class: "sub clip" }, p.description) : "")),
+    cell("Товар", h("div", {}, h("div", { class: "name emoji-category-name" }, emojiThumb(categoryEmoji(state.categories.find(c => c.id === p.category_id)).id, categoryEmoji(state.categories.find(c => c.id === p.category_id)).emoji), p.name), p.description ? h("div", { class: "sub clip" }, plainPremiumText(p.description)) : "")),
     cell("Категория", p.category_name || h("span", { class: "pill yellow" }, "без категории")),
     cell("Цена", inlinePrice(p), "num"),
     cell("Автовыдача", h("div", { class: "cellflex" }, stockPill, `${p.stock_count} шт.`), "num"),
     cell("На витрине", toggle),
     h("td", { class: "act" }, h("div", { class: "row-actions" }, h("button", { class: "btn sm", type: "button", onclick: () => openProduct(p) }, "Открыть"))));
+}
+
+/* Safe rich description: only plain text and immutable premium-emoji chips. */
+function decodeEmojiEntities(value) {
+  const named = {amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"};
+  return String(value).replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (all, key) => {
+    if (key[0] !== '#') return named[key.toLowerCase()];
+    const n = key[1].toLowerCase() === 'x' ? parseInt(key.slice(2),16) : parseInt(key.slice(1),10);
+    return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : all;
+  });
+}
+function premiumTextParts(value) {
+  const parts = [], pattern = /<tg-emoji\b([^>]*)>([^<>]*)<\/tg-emoji\s*>|<custom-emoji-element\b([^>]*)>[^<>]*<\/custom-emoji-element\s*>/gi;
+  let offset = 0;
+  for (const m of String(value || '').matchAll(pattern)) {
+    if (m.index > offset) parts.push({text:value.slice(offset,m.index)});
+    const attrs = {};
+    for (const a of (m[1] ?? m[3]).matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/g)) attrs[a[1].toLowerCase()] = decodeEmojiEntities(a[2] ?? a[3] ?? a[4]);
+    const id = attrs[m[1] !== undefined ? 'emoji-id' : 'data-doc-id'];
+    const emoji = m[1] !== undefined ? decodeEmojiEntities(m[2]) : attrs['data-sticker-emoji'];
+    if (/^[1-9][0-9]{0,19}$/.test(id || '') && emoji && [...emoji].length <= 32) parts.push({id,emoji});
+    else parts.push({text:m[0]});
+    offset = m.index + m[0].length;
+  }
+  if (offset < String(value || '').length) parts.push({text:value.slice(offset)});
+  return parts;
+}
+const escapeEmojiText = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+function premiumInline(chosen, editable = false) {
+  return h('span', {class:'premium-inline', contentEditable:'false', dataset:{emojiId:chosen.id,emojiFallback:chosen.emoji},
+    role:editable ? 'img' : undefined, 'aria-label':'Премиум-эмодзи ' + chosen.emoji}, emojiThumb(chosen.id, chosen.emoji));
+}
+function renderPremiumText(value) {
+  const node = h('span', {class:'premium-text'});
+  for (const part of premiumTextParts(value)) node.append('text' in part ? document.createTextNode(part.text) : premiumInline(part));
+  return node;
+}
+function plainPremiumText(value) { return premiumTextParts(value).map(p => p.text ?? p.emoji).join(''); }
+function premiumDescriptionEditor(value, onChange) {
+  const node = h('div', {class:'premium-editor', contentEditable:'true', role:'textbox', 'aria-label':'Описание товара', 'aria-multiline':'true',
+    dataset:{placeholder:'Что получит покупатель'}, spellcheck:true});
+  let savedRange = null;
+  function fragment(value) {
+    const frag = document.createDocumentFragment();
+    for (const part of premiumTextParts(value)) frag.append('text' in part ? document.createTextNode(part.text) : premiumInline(part, true));
+    return frag;
+  }
+  node.append(fragment(value));
+  function read() {
+    let out = '';
+    function walk(el) {
+      if (el.nodeType === Node.TEXT_NODE) { out += el.textContent; return; }
+      if (el.dataset?.emojiId) { out += `<tg-emoji emoji-id="${el.dataset.emojiId}">${escapeEmojiText(el.dataset.emojiFallback)}</tg-emoji>`; return; }
+      if (el.tagName === 'BR') {out += '\n'; return;}
+      const block = /^(DIV|P)$/.test(el.tagName) && el !== node;
+      if (block && out && !out.endsWith('\n')) out += '\n';
+      for (const child of el.childNodes) walk(child);
+      if (block && !out.endsWith('\n')) out += '\n';
+    }
+    walk(node); return out;
+  }
+  function remember() {
+    const selection = window.getSelection();
+    if (selection?.rangeCount && node.contains(selection.anchorNode) && node.contains(selection.focusNode)) savedRange = selection.getRangeAt(0).cloneRange();
+  }
+  function insert(value) {
+    node.focus();
+    const range = savedRange && node.contains(savedRange.commonAncestorContainer) ? savedRange : document.createRange();
+    if (range !== savedRange) {range.selectNodeContents(node);range.collapse(false);}
+    range.deleteContents(); const frag = fragment(value), last = frag.lastChild;
+    range.insertNode(frag);
+    if (last) range.setStartAfter(last);
+    range.collapse(true); const selection = window.getSelection(); selection.removeAllRanges();selection.addRange(range);savedRange = range.cloneRange();
+    node.dispatchEvent(new Event('input', {bubbles:true}));
+  }
+  node.addEventListener('input', () => {remember();onChange();});
+  node.addEventListener('keyup', remember);node.addEventListener('mouseup', remember);node.addEventListener('blur', remember);
+  // No pasted HTML may execute or turn into arbitrary markup.
+  node.addEventListener('paste', event => {event.preventDefault();remember();insert(event.clipboardData.getData('text/plain'));});
+  node.addEventListener('drop', event => {event.preventDefault();remember();insert(event.dataTransfer.getData('text/plain'));});
+  node.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {event.preventDefault();remember();insert('\n');}
+  });
+  Object.defineProperty(node,'value',{get:read});
+  return {node, insertEmoji:chosen => insert(`<tg-emoji emoji-id="${chosen.id}">${escapeEmojiText(chosen.emoji)}</tg-emoji>`)};
+}
+function productEmojiPanel(onSelect, onClose) {
+  const status = h('p', {class:'muted',role:'status'},'Загружаем эмодзи…');
+  const search = h('input',{type:'search',placeholder:'Поиск эмодзи','aria-label':'Поиск в панели эмодзи'});
+  const packs = h('select',{'aria-label':'Набор в панели эмодзи'});
+  const grid = h('div',{class:'product-emoji-grid','aria-label':'Эмодзи из Telegram'});
+  const more = h('button',{class:'btn',type:'button'},'Показать ещё');
+  const panel = h('aside',{class:'product-emoji-panel',hidden:true,'aria-label':'Панель эмодзи'},
+    h('div',{class:'emoji-panel-head'},h('h4',{},'Эмодзи'),h('button',{class:'btn sm',type:'button','aria-label':'Скрыть панель эмодзи',onclick:onClose},'×')),
+    h('p',{class:'muted'},'Нажми на значок — он вставится на место курсора в описании.'),h('div',{class:'product-emoji-filters'},search,packs),status,grid,more);
+  let rows = [], limit = 60, generation = 0, loading = false;
+  async function draw(reset = true) {
+    const gen = reset ? ++generation : generation;
+    const q = lower(search.value).trim();
+    const filtered = rows.filter(e => (!packs.value || e.pack === packs.value) && (!q || lower([e.emoji,e.pack,e.category].join(' ')).includes(q)));
+    const offset = reset ? 0 : grid.childElementCount;
+    if (reset) grid.replaceChildren();
+    more.hidden = filtered.length <= limit;
+    status.textContent = filtered.length ? `${filtered.length} эмодзи · исходный порядок набора` : 'Ничего не найдено';
+    const visible = filtered.slice(offset,limit);
+    for (let i=0; i<visible.length; i+=60) api('/emojis/previews',{method:'POST',body:{ids:visible.slice(i,i+60).map(e=>e.id)}}).catch(()=>{});
+    for (const item of visible) {
+      // Do not let a Unicode substitute masquerade as the selected premium artwork.
+      const tile = h('button',{class:'emoji-tile loading-emoji',type:'button',disabled:true,'aria-label':`Вставить ${item.emoji}`,
+        title:`${item.pack} · ${item.emoji}`,onmousedown:event=>event.preventDefault(),onclick:()=>onSelect(item)},h('span',{},'·'));
+      grid.append(tile);
+      emojiImageUrl(item.id).then(async ({url,repaint})=>{
+        const image = h('img',{src:url,alt:item.emoji,class:repaint?'repaint':''});await image.decode();
+        if(gen!==generation||!panel.isConnected)return;
+        tile.replaceChildren(image);tile.disabled=false;tile.classList.remove('loading-emoji');
+      }).catch(()=>{if(gen===generation){tile.textContent='×';tile.classList.remove('loading-emoji');tile.title='Миниатюра временно недоступна';tile.classList.add('unavailable-emoji');}});
+    }
+  }
+  search.addEventListener('input',()=>{limit=60;draw();});packs.addEventListener('change',()=>{limit=60;draw();});more.addEventListener('click',()=>{limit+=60;draw(false);});
+  panel.addEventListener('scroll',()=>{if(!more.hidden && panel.scrollTop+panel.clientHeight >= panel.scrollHeight-80)more.click();});
+  panel.open = async () => {
+    panel.hidden=false;
+    if(rows.length||loading)return;
+    loading=true;
+    try {rows=await loadEmojiCatalog();packs.append(h('option',{value:''},'Все наборы'),...[...new Set(rows.map(e=>e.pack))].map(p=>h('option',{value:p},p)));packs.value='TgAndroidIcons';await draw();}
+    catch(e){status.textContent='Не удалось загрузить эмодзи. Закрой и открой панель, чтобы повторить.';}
+    finally{loading=false;}
+  };
+  return panel;
 }
 
 function openProduct(product) {
@@ -472,9 +601,11 @@ function openProduct(product) {
     name: h("input", { maxLength: 150, value: p.name, placeholder: "Например, ChatGPT Plus" }),
     category: h("select", {}, h("option", { value: "" }, "Без категории"), state.categories.map(c => h("option", { value: String(c.id), selected: String(c.id) === String(p.category_id) }, c.name + (c.is_active ? "" : " (скрыта)")))),
     price: h("input", { type: "number", min: 0, step: "0.01", value: p.price === "" ? "" : num(p.price), placeholder: "790" }),
-    description: h("textarea", { placeholder: "Что получит покупатель", value: p.description || "" }),
+    description: null,
     active: h("input", { type: "checkbox", checked: !!p.is_active }),
   };
+  const descriptionEditor = premiumDescriptionEditor(p.description || "", () => drawPreview());
+  f.description = descriptionEditor.node;
   const field = (label, node, full) => h("div", { class: full ? "full" : "" }, h("label", { class: "lbl" }, label), node);
   const save = h("button", { class: "btn primary", type: "button" }, isNew ? "Создать товар" : "Сохранить");
   save.addEventListener("click", async () => {
@@ -493,13 +624,13 @@ function openProduct(product) {
     const roles = state.emojiSettings?.values || {};
     preview.replaceChildren(
       h("div", { class: "preview-title" }, emojiThumb(icon.id, icon.emoji), h("b", {}, f.name.value || "Название товара")),
-      h("div", { class: "preview-description" }, emojiThumb(roles.description || "5843843420468024653", "⭐️"), f.description.value || "Описание товара"),
+      h("div", { class: "preview-description" }, emojiThumb(roles.description || "5843843420468024653", "⭐️"), renderPremiumText(f.description.value)),
       h("div", {}, emojiThumb(roles.dollar || "5974217466270716579", "💵"), num(f.price.value).toFixed(2)),
       h("div", {}, emojiThumb(roles.stock || "5877260593903177342", "⚙"), "В наличии: " + (p.stock_count || 0)));
   }
   [f.name, f.description, f.price, f.category].forEach(input => input.addEventListener("input", drawPreview));
   drawPreview();
-  const drawer = h("div", { class: "drawer", role: "dialog", "aria-modal": "true" },
+  const drawer = h("div", { class: "drawer product-form", role: "dialog", "aria-modal": "true" },
     h("div", { class: "drawer-head" }, h("div", {}, h("p", { class: "eyebrow" }, isNew ? "Новый товар" : `Товар № ${p.id}`), h("h3", {}, isNew ? "Добавить товар" : p.name)),
       h("button", { class: "btn sm", type: "button", "aria-label": "Закрыть", onclick: closeTopOverlay }, "×")),
     h("div", { class: "form-grid" }, field("Название", f.name, true), field("Категория", f.category), field("Цена, USD", f.price), field("Описание", f.description, true)),
@@ -514,7 +645,20 @@ function openProduct(product) {
         if (await act(() => api("/products/" + p.id, { method: "DELETE" }), `Товар «${p.name}» удалён.`)) closeTopOverlay();
       } }, "Удалить товар")));
   }
-  openOverlay(drawer);
+  const togglePanel = () => {
+    const open = panel.hidden;
+    shell.classList.toggle('with-emojis', open);emojiToggle.setAttribute('aria-expanded',String(open));
+    if(open){panel.open();requestAnimationFrame(()=>f.description.scrollIntoView({block:"nearest"}));}else panel.hidden=true;
+  };
+  const panel = productEmojiPanel(chosen => descriptionEditor.insertEmoji(chosen), togglePanel);
+  const emojiToggle = h('button',{class:'btn',type:'button','aria-expanded':'false',onclick:togglePanel},'☺ Эмодзи');
+  const toolbar = h('div',{class:'description-toolbar'},h('span',{class:'muted'},'Текст и премиум-эмодзи'),emojiToggle);
+  f.description.before(toolbar);
+  f.description.after(h('p',{class:'description-help muted'},'Нажми «Эмодзи» и выбери значок справа. В Telegram будет отправлен тот же премиум-эмодзи.'));
+  const actions = drawer.querySelector(':scope > .actions');actions.classList.add('product-footer');
+  const main = h('div',{class:'product-main'},drawer,actions);
+  const shell = h('div',{class:'product-dialog'},main,panel);
+  openOverlay(shell,{center:true});
 }
 
 function stockSection(p) {
@@ -912,13 +1056,13 @@ $("nav").addEventListener("click", event => { const button = event.target.closes
 window.addEventListener("hashchange", route);
 document.addEventListener("keydown", event => {
   if (event.key === "Escape") closeTopOverlay();
-  if (event.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
+  if (event.key === "/" && !document.activeElement.isContentEditable && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
     const search = $("search"); if (search) { event.preventDefault(); search.focus(); }
   }
 });
 setInterval(() => {
   if (!token || $("app").hidden || !state.autoRefresh || document.hidden || closeOverlay) return;
-  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+  if (document.activeElement.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
   loadAll({ silent: true }).catch(() => { /* следующая попытка через минуту */ });
 }, 60000);
 
