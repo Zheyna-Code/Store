@@ -34,14 +34,17 @@ function s(tag, attrs, ...children) {
   return node;
 }
 const num = v => Number(v) || 0;
-const money = v => num(v).toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " $";
+const moneyFormatter = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const money = v => moneyFormatter.format(num(v)) + " $";
 const plural = (n, a, b, c) => { const m = Math.abs(n) % 100, k = m % 10; return m > 10 && m < 20 ? c : k === 1 ? a : k > 1 && k < 5 ? b : c; };
 const short = v => v >= 1e6 ? (v / 1e6).toFixed(1).replace(".0", "") + "М" : v >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0).replace(".0", "") + "к" : String(Math.round(v * 10) / 10);
 const lower = v => String(v ?? "").toLocaleLowerCase("ru-RU");
 const dayLabel = iso => { const [, m, d] = iso.split("-"); return `${d}.${m}`; };
+const dateFormatter = new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const clockFormatter = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" });
 const fmtDate = value => {
   const date = new Date(value);
-  return isNaN(date) ? "" : date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return isNaN(date) ? "" : dateFormatter.format(date);
 };
 const STATUS = { paid: "оплачен", pending: "ждёт оплаты", cancelled: "отменён", paid_no_stock: "оплачен, нет товара" };
 const STATUS_COLOR = { paid: "#ffffff", pending: "#b4b8c1", cancelled: "#6b6f79", paid_no_stock: "#8f939d" };
@@ -83,39 +86,83 @@ function confirmBox(title, message, okLabel = "Подтвердить", danger =
 
 
 /* ==================================================================== запросы == */
-async function api(path, options = {}) {
-  const response = await fetch("/api/admin" + path, {
-    method: options.method || "GET",
-    headers: Object.assign({ "X-Admin-Token": token }, options.body ? { "Content-Type": "application/json" } : {}),
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    cache: "no-store",
-  });
-  let data = null;
-  try { data = await response.json(); } catch { throw Object.assign(new Error("Сервер вернул некорректный ответ"), { status: response.status }); }
-  if (response.status === 401) { logout("Сессия закончилась, введи ключ заново."); throw Object.assign(new Error("Войдите в панель заново"), { status: 401 }); }
-  if (!response.ok) throw Object.assign(new Error((data && data.error) || `Ошибка ${response.status}`), { status: response.status });
-  return data;
+/* GET requests and page refreshes share in-flight work; writes are never retried. */
+const pendingGets = new Map();
+const pendingLoads = new Map();
+const loadedData = new Set();
+function api(path, options = {}) {
+  const method = options.method || "GET";
+  const requestToken = token;
+  const key = requestToken + "|" + path;
+  if (method === "GET" && pendingGets.has(key)) return pendingGets.get(key);
+  const task = (async () => {
+    const controller = new AbortController();
+    const timer = method === "GET" ? setTimeout(() => controller.abort(), 20000) : null;
+    try {
+      const response = await fetch("/api/admin" + path, {
+        method, signal: controller.signal,
+        headers: Object.assign({ "X-Admin-Token": requestToken }, options.body ? { "Content-Type": "application/json" } : {}),
+        body: options.body ? JSON.stringify(options.body) : undefined, cache: "no-store",
+      });
+      let data;
+      try { data = await response.json(); }
+      catch (error) { if (error.name === "AbortError") throw error; throw Object.assign(new Error("Сервер вернул некорректный ответ"), { status: response.status }); }
+      // A response from a previous login may not alter or log out the new session.
+      if (requestToken !== token) throw Object.assign(new Error("Сессия изменилась"), { status: 401 });
+      if (response.status === 401) { logout("Сессия закончилась, введи ключ заново."); throw Object.assign(new Error("Войдите в панель заново"), { status: 401 }); }
+      if (!response.ok) throw Object.assign(new Error((data && data.error) || `Ошибка ${response.status}`), { status: response.status });
+      return data;
+    } catch (error) {
+      if (requestToken !== token) throw Object.assign(new Error("Сессия изменилась"), { status: 401 });
+      if (error.name === "AbortError") throw new Error("Сервер не ответил вовремя. Попробуйте обновить данные позже.");
+      throw error;
+    } finally { if (timer) clearTimeout(timer); }
+  })();
+  if (method === "GET") {
+    pendingGets.set(key, task);
+    task.then(() => pendingGets.delete(key), () => pendingGets.delete(key));
+  }
+  return task;
 }
 
-async function loadAll({ silent = false } = {}) {
-  const tz = -new Date().getTimezoneOffset();
-  const names = ["dashboard", "categories", "products", "customers", "orders", "analytics", "emojiSettings"];
-  const results = await Promise.allSettled([
-    api("/dashboard"), api("/categories"), api("/products"), api("/customers"), api("/orders"), api(`/analytics?days=${state.days}&tz=${tz}`), api("/emojis/settings"),
-  ]);
-  const unauthorized = results.find(r => r.status === "rejected" && r.reason.status === 401);
-  if (unauthorized) throw unauthorized.reason;
-  const failed = [];
-  results.forEach((result, index) => {
-    if (result.status === "fulfilled") state[names[index]] = result.value;
-    else if (names[index] !== "analytics") failed.push(result.reason);
-    else state.analytics = null; // старый сервер без /analytics — графики скрыты, остальное работает
-  });
-  if (!state.dashboard) throw failed[0] || new Error("Не удалось загрузить данные.");
-  $("last-update").textContent = "Обновлено: " + new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-  updateBadges();
-  render();
-  if (!silent && failed.length) toast("Часть данных не загрузилась: " + failed[0].message, "error");
+function loadAll({ silent = false } = {}) {
+  const page = state.page, days = state.days, requestToken = token;
+  const key = requestToken + "|" + page + "|" + days;
+  if (pendingLoads.has(key)) return pendingLoads.get(key);
+  const task = (async () => {
+    const scopes = {
+      dashboard: ["dashboard", "categories", "products", "orders", "analytics"],
+      products: ["categories", "products", "orders"],
+      categories: ["categories", "products", "orders"],
+      customers: ["customers", "products", "orders"],
+      orders: ["orders", "products"],
+    };
+    const primary = page === "dashboard" ? "dashboard" : page;
+    const names = [...(scopes[page] || scopes.dashboard)];
+    if (["dashboard", "products", "categories"].includes(page) && !state.emojiSettings) names.push("emojiSettings");
+    const tz = -new Date().getTimezoneOffset();
+    const paths = { analytics: `/analytics?days=${days}&tz=${tz}`, emojiSettings: "/emojis/settings" };
+    const results = await Promise.allSettled(names.map(name => api(paths[name] || "/" + name)));
+    if (requestToken !== token) throw Object.assign(new Error("Сессия изменилась"), { status: 401 });
+    const unauthorized = results.find(r => r.status === "rejected" && r.reason.status === 401);
+    if (unauthorized) throw unauthorized.reason;
+    const failed = [];
+    results.forEach((result, index) => {
+      const name = names[index];
+      if (name === "analytics" && days !== state.days) return;
+      if (result.status === "fulfilled") { state[name] = result.value; loadedData.add(name); }
+      else if (name === "analytics") state.analytics = null;
+      else failed.push(result.reason);
+    });
+    if (!loadedData.has(primary)) throw failed[0] || new Error("Не удалось загрузить данные.");
+    $("last-update").textContent = "Обновлено: " + clockFormatter.format(new Date());
+    updateBadges();
+    if (page === state.page && days === state.days) render();
+    if (!silent && failed.length) toast("Часть данных не загрузилась: " + failed[0].message, "error");
+  })();
+  pendingLoads.set(key, task);
+  task.then(() => pendingLoads.delete(key), () => pendingLoads.delete(key));
+  return task;
 }
 
 /** Выполняет действие, показывает уведомление и обновляет данные. */
@@ -146,9 +193,11 @@ async function login(event) {
 }
 async function start() {
   try {
+    const page = location.hash.replace(/^#\/?/, "");
+    state.page = PAGES[page] ? page : "dashboard";
     await loadAll({ silent: true });
     $("login").hidden = true; $("app").hidden = false;
-    route();
+    render();
   } catch (error) { if (error.status !== 401) { $("loginError").textContent = error.message; $("login").hidden = false; } }
 }
 function logout(message) {
@@ -158,6 +207,9 @@ function logout(message) {
   while (closeOverlay) closeTopOverlay();
   for (const value of emojiImageCache.values()) value.then(entry => URL.revokeObjectURL(entry.url)).catch(() => {});
   emojiImageCache.clear();
+  loadedData.clear();
+  for (const key of ["categories", "products", "customers", "orders"]) state[key] = [];
+  state.dashboard = state.analytics = state.emojiSettings = null;
 }
 
 /* ================================================================== графики == */
@@ -387,9 +439,14 @@ function renderDashboard() {
 }
 
 /* ==================================================================== товары == */
+const productSearchCache = new WeakMap();
+function normalizedProductText(p) {
+  if (!productSearchCache.has(p)) productSearchCache.set(p, lower(p.name + " " + plainPremiumText(p.description)));
+  return productSearchCache.get(p);
+}
 function productMatches(p) {
   const q = lower(state.productSearch.trim());
-  if (q && !lower(p.name + " " + plainPremiumText(p.description)).includes(q)) return false;
+  if (q && !normalizedProductText(p).includes(q)) return false;
   if (state.productCategory && String(p.category_id) !== state.productCategory) return false;
   switch (state.productFilter) {
     case "on": return !!p.is_active;
@@ -422,6 +479,7 @@ function inlinePrice(p) {
 
 function renderProducts() {
   const all = state.products;
+  const categoryIndex = new Map(state.categories.map(c => [c.id, c]));
   const counts = {
     all: all.length, on: all.filter(p => p.is_active).length, off: all.filter(p => !p.is_active).length,
     low: all.filter(p => p.stock_count > 0 && p.stock_count <= LOW_STOCK).length, out: all.filter(p => p.stock_count <= 0).length,
@@ -437,11 +495,12 @@ function renderProducts() {
   function refresh() {
     const rows = all.filter(productMatches);
     countNode.textContent = `Показано: ${rows.length} из ${all.length}`;
-    tbody.replaceChildren(...rows.map(productRow));
+    tbody.replaceChildren(...rows.map(p => productRow(p, categoryIndex)));
     tableCard.hidden = !rows.length; empty.hidden = !!rows.length;
     empty.textContent = all.length ? "Ничего не найдено — измени фильтры." : "Товаров пока нет. Добавь первый.";
   }
-  search.addEventListener("input", () => { state.productSearch = search.value; refresh(); });
+  let searchTimer;
+  search.addEventListener("input", () => { state.productSearch = search.value; clearTimeout(searchTimer); searchTimer = setTimeout(refresh, 120); });
   tableCard.append(h("div", { class: "tscroll" }, h("table", { class: "resp" },
     h("thead", {}, h("tr", {}, ["Товар", "Категория", "Цена, USD", "Автовыдача", "На витрине", ""].map((t, i) => h("th", { class: i === 2 || i === 3 ? "num" : "" }, t)))), tbody)));
   refresh();
@@ -450,14 +509,16 @@ function renderProducts() {
     tableCard, empty);
 }
 
-function productRow(p) {
+function productRow(p, categoryIndex) {
+  const category = categoryIndex.get(p.category_id);
+  const icon = categoryEmoji(category);
   const stockPill = p.stock_count <= 0 ? h("span", { class: "pill red" }, "нет") : p.stock_count <= LOW_STOCK ? h("span", { class: "pill yellow" }, "мало") : null;
   const toggle = h("label", { class: "switch", title: "Показывать в каталоге" },
     h("input", { type: "checkbox", checked: !!p.is_active, "aria-label": "Активен", onchange: event => saveProduct(p, { is_active: event.target.checked }, `«${p.name}»: ${event.target.checked ? "показан в каталоге" : "скрыт из каталога"}`) }),
     h("span", {}));
   const cell = (label, content, cls) => h("td", { dataset: { label }, class: cls || "" }, content);
   return h("tr", {},
-    cell("Товар", h("div", {}, h("div", { class: "name emoji-category-name" }, emojiThumb(categoryEmoji(state.categories.find(c => c.id === p.category_id)).id, categoryEmoji(state.categories.find(c => c.id === p.category_id)).emoji), p.name), p.description ? h("div", { class: "sub clip" }, plainPremiumText(p.description)) : "")),
+    cell("Товар", h("div", {}, h("div", { class: "name emoji-category-name" }, emojiThumb(icon.id, icon.emoji), p.name), p.description ? h("div", { class: "sub clip" }, plainPremiumText(p.description)) : "")),
     cell("Категория", p.category_name || h("span", { class: "pill yellow" }, "без категории")),
     cell("Цена", inlinePrice(p), "num"),
     cell("Автовыдача", h("div", { class: "cellflex" }, stockPill, `${p.stock_count} шт.`), "num"),
@@ -490,10 +551,8 @@ function premiumTextParts(value) {
   if (offset < String(value || '').length) parts.push({text:value.slice(offset)});
   return parts;
 }
-const escapeEmojiText = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
-function premiumInline(chosen, editable = false) {
-  return h('span', {class:'premium-inline', contentEditable:'false', dataset:{emojiId:chosen.id,emojiFallback:chosen.emoji},
-    role:editable ? 'img' : undefined, 'aria-label':'Премиум-эмодзи ' + chosen.emoji}, emojiThumb(chosen.id, chosen.emoji));
+function premiumInline(chosen) {
+  return h("span", { class: "premium-inline", "aria-label": "Премиум-эмодзи " + chosen.emoji }, emojiThumb(chosen.id, chosen.emoji));
 }
 function renderPremiumText(value) {
   const node = h('span', {class:'premium-text'});
@@ -501,99 +560,6 @@ function renderPremiumText(value) {
   return node;
 }
 function plainPremiumText(value) { return premiumTextParts(value).map(p => p.text ?? p.emoji).join(''); }
-function premiumDescriptionEditor(value, onChange) {
-  const node = h('div', {class:'premium-editor', contentEditable:'true', role:'textbox', 'aria-label':'Описание товара', 'aria-multiline':'true',
-    dataset:{placeholder:'Что получит покупатель'}, spellcheck:true});
-  let savedRange = null;
-  function fragment(value) {
-    const frag = document.createDocumentFragment();
-    for (const part of premiumTextParts(value)) frag.append('text' in part ? document.createTextNode(part.text) : premiumInline(part, true));
-    return frag;
-  }
-  node.append(fragment(value));
-  function read() {
-    let out = '';
-    function walk(el) {
-      if (el.nodeType === Node.TEXT_NODE) { out += el.textContent; return; }
-      if (el.dataset?.emojiId) { out += `<tg-emoji emoji-id="${el.dataset.emojiId}">${escapeEmojiText(el.dataset.emojiFallback)}</tg-emoji>`; return; }
-      if (el.tagName === 'BR') {out += '\n'; return;}
-      const block = /^(DIV|P)$/.test(el.tagName) && el !== node;
-      if (block && out && !out.endsWith('\n')) out += '\n';
-      for (const child of el.childNodes) walk(child);
-      if (block && !out.endsWith('\n')) out += '\n';
-    }
-    walk(node); return out;
-  }
-  function remember() {
-    const selection = window.getSelection();
-    if (selection?.rangeCount && node.contains(selection.anchorNode) && node.contains(selection.focusNode)) savedRange = selection.getRangeAt(0).cloneRange();
-  }
-  function insert(value) {
-    node.focus();
-    const range = savedRange && node.contains(savedRange.commonAncestorContainer) ? savedRange : document.createRange();
-    if (range !== savedRange) {range.selectNodeContents(node);range.collapse(false);}
-    range.deleteContents(); const frag = fragment(value), last = frag.lastChild;
-    range.insertNode(frag);
-    if (last) range.setStartAfter(last);
-    range.collapse(true); const selection = window.getSelection(); selection.removeAllRanges();selection.addRange(range);savedRange = range.cloneRange();
-    node.dispatchEvent(new Event('input', {bubbles:true}));
-  }
-  node.addEventListener('input', () => {remember();onChange();});
-  node.addEventListener('keyup', remember);node.addEventListener('mouseup', remember);node.addEventListener('blur', remember);
-  // No pasted HTML may execute or turn into arbitrary markup.
-  node.addEventListener('paste', event => {event.preventDefault();remember();insert(event.clipboardData.getData('text/plain'));});
-  node.addEventListener('drop', event => {event.preventDefault();remember();insert(event.dataTransfer.getData('text/plain'));});
-  node.addEventListener('keydown', event => {
-    if (event.key === 'Enter') {event.preventDefault();remember();insert('\n');}
-  });
-  Object.defineProperty(node,'value',{get:read});
-  return {node, insertEmoji:chosen => insert(`<tg-emoji emoji-id="${chosen.id}">${escapeEmojiText(chosen.emoji)}</tg-emoji>`)};
-}
-function productEmojiPanel(onSelect, onClose) {
-  const status = h('p', {class:'muted',role:'status'},'Загружаем эмодзи…');
-  const search = h('input',{type:'search',placeholder:'Поиск эмодзи','aria-label':'Поиск в панели эмодзи'});
-  const packs = h('select',{'aria-label':'Набор в панели эмодзи'});
-  const grid = h('div',{class:'product-emoji-grid','aria-label':'Эмодзи из Telegram'});
-  const more = h('button',{class:'btn',type:'button'},'Показать ещё');
-  const panel = h('aside',{class:'product-emoji-panel',hidden:true,'aria-label':'Панель эмодзи'},
-    h('div',{class:'emoji-panel-head'},h('h4',{},'Эмодзи'),h('button',{class:'btn sm',type:'button','aria-label':'Скрыть панель эмодзи',onclick:onClose},'×')),
-    h('p',{class:'muted'},'Нажми на значок — он вставится на место курсора в описании.'),h('div',{class:'product-emoji-filters'},search,packs),status,grid,more);
-  let rows = [], limit = 60, generation = 0, loading = false;
-  async function draw(reset = true) {
-    const gen = reset ? ++generation : generation;
-    const q = lower(search.value).trim();
-    const filtered = rows.filter(e => (!packs.value || e.pack === packs.value) && (!q || lower([e.emoji,e.pack,e.category].join(' ')).includes(q)));
-    const offset = reset ? 0 : grid.childElementCount;
-    if (reset) grid.replaceChildren();
-    more.hidden = filtered.length <= limit;
-    status.textContent = filtered.length ? `${filtered.length} эмодзи · исходный порядок набора` : 'Ничего не найдено';
-    const visible = filtered.slice(offset,limit);
-    for (let i=0; i<visible.length; i+=60) api('/emojis/previews',{method:'POST',body:{ids:visible.slice(i,i+60).map(e=>e.id)}}).catch(()=>{});
-    for (const item of visible) {
-      // Do not let a Unicode substitute masquerade as the selected premium artwork.
-      const tile = h('button',{class:'emoji-tile loading-emoji',type:'button',disabled:true,'aria-label':`Вставить ${item.emoji}`,
-        title:`${item.pack} · ${item.emoji}`,onmousedown:event=>event.preventDefault(),onclick:()=>onSelect(item)},h('span',{},'·'));
-      grid.append(tile);
-      emojiImageUrl(item.id).then(async ({url,repaint})=>{
-        const image = h('img',{src:url,alt:item.emoji,class:repaint?'repaint':''});await image.decode();
-        if(gen!==generation||!panel.isConnected)return;
-        tile.replaceChildren(image);tile.disabled=false;tile.classList.remove('loading-emoji');
-      }).catch(()=>{if(gen===generation){tile.textContent='×';tile.classList.remove('loading-emoji');tile.title='Миниатюра временно недоступна';tile.classList.add('unavailable-emoji');}});
-    }
-  }
-  search.addEventListener('input',()=>{limit=60;draw();});packs.addEventListener('change',()=>{limit=60;draw();});more.addEventListener('click',()=>{limit+=60;draw(false);});
-  panel.addEventListener('scroll',()=>{if(!more.hidden && panel.scrollTop+panel.clientHeight >= panel.scrollHeight-80)more.click();});
-  panel.open = async () => {
-    panel.hidden=false;
-    if(rows.length||loading)return;
-    loading=true;
-    try {rows=await loadEmojiCatalog();packs.append(h('option',{value:''},'Все наборы'),...[...new Set(rows.map(e=>e.pack))].map(p=>h('option',{value:p},p)));packs.value='TgAndroidIcons';await draw();}
-    catch(e){status.textContent='Не удалось загрузить эмодзи. Закрой и открой панель, чтобы повторить.';}
-    finally{loading=false;}
-  };
-  return panel;
-}
-
 function openProduct(product) {
   const isNew = !product;
   const p = product || { name: "", description: "", price: "", category_id: (state.categories.find(c => c.is_active) || {}).id || "", is_active: true };
@@ -601,15 +567,16 @@ function openProduct(product) {
     name: h("input", { maxLength: 150, value: p.name, placeholder: "Например, ChatGPT Plus" }),
     category: h("select", {}, h("option", { value: "" }, "Без категории"), state.categories.map(c => h("option", { value: String(c.id), selected: String(c.id) === String(p.category_id) }, c.name + (c.is_active ? "" : " (скрыта)")))),
     price: h("input", { type: "number", min: 0, step: "0.01", value: p.price === "" ? "" : num(p.price), placeholder: "790" }),
-    description: null,
+    description: h("textarea", { name: "description", "aria-label": "Описание товара", placeholder: "Что получит покупатель", value: plainPremiumText(p.description || "") }),
     active: h("input", { type: "checkbox", checked: !!p.is_active }),
   };
-  const descriptionEditor = premiumDescriptionEditor(p.description || "", () => drawPreview());
-  f.description = descriptionEditor.node;
+  const originalDescription = p.description || "";
+  const originalPlainDescription = plainPremiumText(originalDescription);
+  const currentDescription = () => f.description.value === originalPlainDescription ? originalDescription : f.description.value.trim();
   const field = (label, node, full) => h("div", { class: full ? "full" : "" }, h("label", { class: "lbl" }, label), node);
   const save = h("button", { class: "btn primary", type: "button" }, isNew ? "Создать товар" : "Сохранить");
   save.addEventListener("click", async () => {
-    const body = { name: f.name.value.trim(), description: f.description.value.trim(), price: f.price.value.trim(), category_id: f.category.value ? Number(f.category.value) : null, is_active: f.active.checked };
+    const body = { name: f.name.value.trim(), description: currentDescription(), price: f.price.value.trim(), category_id: f.category.value ? Number(f.category.value) : null, is_active: f.active.checked };
     if (!body.name) { toast("Название не может быть пустым.", "error"); f.name.focus(); return; }
     if (body.price === "" || num(body.price) < 0) { toast("Укажи цену — число от 0.", "error"); f.price.focus(); return; }
     save.disabled = true;
@@ -624,7 +591,7 @@ function openProduct(product) {
     const roles = state.emojiSettings?.values || {};
     preview.replaceChildren(
       h("div", { class: "preview-title" }, emojiThumb(icon.id, icon.emoji), h("b", {}, f.name.value || "Название товара")),
-      h("div", { class: "preview-description" }, emojiThumb(roles.description || "5843843420468024653", "⭐️"), renderPremiumText(f.description.value)),
+      h("div", { class: "preview-description" }, emojiThumb(roles.description || "5843843420468024653", "⭐️"), renderPremiumText(currentDescription())),
       h("div", {}, emojiThumb(roles.dollar || "5974217466270716579", "💵"), num(f.price.value).toFixed(2)),
       h("div", {}, emojiThumb(roles.stock || "5877260593903177342", "⚙"), "В наличии: " + (p.stock_count || 0)));
   }
@@ -634,7 +601,7 @@ function openProduct(product) {
     h("div", { class: "drawer-head" }, h("div", {}, h("p", { class: "eyebrow" }, isNew ? "Новый товар" : `Товар № ${p.id}`), h("h3", {}, isNew ? "Добавить товар" : p.name)),
       h("button", { class: "btn sm", type: "button", "aria-label": "Закрыть", onclick: closeTopOverlay }, "×")),
     h("div", { class: "form-grid" }, field("Название", f.name, true), field("Категория", f.category), field("Цена, USD", f.price), field("Описание", f.description, true)),
-    h("div", { class: "section" }, h("h4", {}, "Как выглядит карточка в Telegram"), preview, h("p", { class: "muted" }, "Статичный предпросмотр. Эмодзи наследуется от категории, значки описания, цены и остатка — из раздела «Эмодзи». Цена в USD.")),
+    h("div", { class: "section" }, h("h4", {}, "Как выглядит карточка в Telegram"), preview, h("p", { class: "muted" }, "Статичный предпросмотр карточки. Цена в USD.")),
     h("div", { class: "section" }, h("div", { class: "toggle-row" }, h("div", {}, h("div", {}, "Показывать в каталоге"), h("div", { class: "sub dim" }, "Скрытый товар покупатели не видят"), ), h("label", { class: "switch" }, f.active, h("span", {})))),
     h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: closeTopOverlay }, "Отмена"), save));
   if (!isNew) {
@@ -645,19 +612,9 @@ function openProduct(product) {
         if (await act(() => api("/products/" + p.id, { method: "DELETE" }), `Товар «${p.name}» удалён.`)) closeTopOverlay();
       } }, "Удалить товар")));
   }
-  const togglePanel = () => {
-    const open = panel.hidden;
-    shell.classList.toggle('with-emojis', open);emojiToggle.setAttribute('aria-expanded',String(open));
-    if(open){panel.open();requestAnimationFrame(()=>f.description.scrollIntoView({block:"nearest"}));}else panel.hidden=true;
-  };
-  const panel = productEmojiPanel(chosen => descriptionEditor.insertEmoji(chosen), togglePanel);
-  const emojiToggle = h('button',{class:'btn',type:'button','aria-expanded':'false',onclick:togglePanel},'☺ Эмодзи');
-  const toolbar = h('div',{class:'description-toolbar'},h('span',{class:'muted'},'Текст и премиум-эмодзи'),emojiToggle);
-  f.description.before(toolbar);
-  f.description.after(h('p',{class:'description-help muted'},'Нажми «Эмодзи» и выбери значок справа. В Telegram будет отправлен тот же премиум-эмодзи.'));
   const actions = drawer.querySelector(':scope > .actions');actions.classList.add('product-footer');
   const main = h('div',{class:'product-main'},drawer,actions);
-  const shell = h('div',{class:'product-dialog'},main,panel);
+  const shell = h('div',{class:'product-dialog'},main);
   openOverlay(shell,{center:true});
 }
 
@@ -707,11 +664,9 @@ function openCategory(category) {
   const name = h("input", { maxLength: 80, value: c.name, placeholder: "Например, ChatGPT" });
   const order = h("input", { type: "number", value: c.sort_order });
   const active = h("input", { type: "checkbox", checked: !!c.is_active });
-  let chosenEmoji = c.custom_emoji_id ? categoryEmoji(c) : null;
-  const emojiControl = emojiField(categoryEmoji(c), selected => { chosenEmoji = selected; }, { reset: () => categoryEmoji({ name: name.value }) });
   const submit = h("button", { class: "btn primary", type: "button" }, "Сохранить");
   const send = async () => {
-    const body = { name: name.value.trim(), sort_order: Number.parseInt(order.value, 10) || 0, is_active: active.checked, custom_emoji_id: chosenEmoji?.id || null, emoji_fallback: chosenEmoji?.emoji || "🛍" };
+    const body = { name: name.value.trim(), sort_order: Number.parseInt(order.value, 10) || 0, is_active: active.checked };
     if (!body.name) { toast("Название не может быть пустым.", "error"); return; }
     submit.disabled = true;
     const ok = await act(() => api(isNew ? "/categories" : "/categories/" + c.id, { method: isNew ? "POST" : "PUT", body }), "Категория сохранена.");
@@ -724,8 +679,6 @@ function openCategory(category) {
     h("h3", {}, isNew ? "Новая категория" : "Изменить категорию"),
     h("div", { style: "margin-top:12px" }, h("label", { class: "lbl" }, "Название"), name),
     h("div", { style: "margin-top:12px" }, h("label", { class: "lbl" }, "Порядок показа"), order),
-    h("div", { style: "margin-top:16px" }, h("label", { class: "lbl" }, "Эмодзи категории и всех её товаров"), emojiControl,
-      h("p", { class: "muted" }, "Товары наследуют этот значок в списке и карточке. Пустое значение использует исходный логотип категории.")),
     h("div", { class: "toggle-row" }, h("span", {}, "Показывать в каталоге"), h("label", { class: "switch" }, active, h("span", {}))),
     h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: closeTopOverlay }, "Отмена"), submit)), { center: true });
   name.focus();
@@ -734,14 +687,17 @@ function renderCategories() {
   const cats = state.categories;
   if (!cats.length) return h("div", { class: "card empty" }, "Категорий пока нет.");
   const body = c => ({ name: c.name, sort_order: c.sort_order, is_active: c.is_active });
+  const productCounts = new Map();
+  for (const p of state.products) productCounts.set(p.category_id, (productCounts.get(p.category_id) || 0) + 1);
   const rows = cats.map(c => {
-    const count = state.products.filter(p => p.category_id === c.id).length;
+    const count = productCounts.get(c.id) || 0;
+    const icon = categoryEmoji(c);
     const order = h("input", { class: "inline-num", type: "number", value: c.sort_order, "aria-label": "Порядок", style: "width:72px",
       onchange: event => act(() => api("/categories/" + c.id, { method: "PUT", body: { ...body(c), sort_order: Number.parseInt(event.target.value, 10) || 0 } }), `«${c.name}»: порядок ${event.target.value}`) });
     const toggle = h("label", { class: "switch" }, h("input", { type: "checkbox", checked: !!c.is_active, "aria-label": "Показывать",
       onchange: event => act(() => api("/categories/" + c.id, { method: "PUT", body: { ...body(c), is_active: event.target.checked } }), `«${c.name}»: ${event.target.checked ? "показана" : "скрыта"}`) }), h("span", {}));
     const cell = (label, content, cls) => h("td", { dataset: { label }, class: cls || "" }, content);
-    return h("tr", {}, cell("Название", h("span", { class: "name emoji-category-name" }, emojiThumb(categoryEmoji(c).id, categoryEmoji(c).emoji), c.name)), cell("Товаров", count, "num"), cell("Порядок", order, "num"), cell("В каталоге", toggle),
+    return h("tr", {}, cell("Название", h("span", { class: "name emoji-category-name" }, emojiThumb(icon.id, icon.emoji), c.name)), cell("Товаров", count, "num"), cell("Порядок", order, "num"), cell("В каталоге", toggle),
       h("td", { class: "act" }, h("div", { class: "row-actions" }, h("button", { class: "btn sm", type: "button", onclick: () => openCategory(c) }, "Изменить"))));
   });
   return h("div", { class: "card table-card" }, h("div", { class: "tscroll" }, h("table", { class: "resp" },
@@ -851,8 +807,6 @@ function customerRow(c) {
 }
 
 /* ============================================================= premium emoji == */
-let emojiCatalog = null;
-let emojiCatalogPromise = null;
 const emojiImageCache = new Map();
 let previewActive = 0;
 const previewQueue = [];
@@ -868,13 +822,10 @@ function drainPreviews() {
     previewQueue.shift()().finally(() => { previewActive--; drainPreviews(); });
   }
 }
-async function loadEmojiCatalog() {
-  if (emojiCatalog) return emojiCatalog;
-  if (!emojiCatalogPromise) emojiCatalogPromise = api('/emojis/catalog').then(rows => { emojiCatalog = rows; return rows; }).finally(() => { emojiCatalogPromise = null; });
-  return emojiCatalogPromise;
-}
 async function emojiImageUrl(id) {
-  if (emojiImageCache.has(id)) return emojiImageCache.get(id);
+  if (emojiImageCache.has(id)) {
+    const cached = emojiImageCache.get(id);emojiImageCache.delete(id);emojiImageCache.set(id, cached);return cached;
+  }
   const request = schedulePreview(async () => {
     const response = await fetch('/api/admin/emojis/image/' + encodeURIComponent(id), { headers: { 'X-Admin-Token': token } });
     if (!response.ok) throw new Error('Нет предпросмотра');
@@ -890,8 +841,8 @@ async function emojiImageUrl(id) {
   }
   return request;
 }
-function emojiThumb(id, fallback = '◌', large = false) {
-  const node = h('span', { class: 'emoji-thumb' + (large ? ' large' : ''), title: 'ID: ' + id }, fallback);
+function emojiThumb(id, fallback = '◌') {
+  const node = h('span', { class: 'emoji-thumb', title: 'ID: ' + id }, fallback);
   // Actual Telegram image, not the catalog's ordinary Unicode fallback.
   emojiImageUrl(id).then(({ url, repaint }) => {
     if (!node.isConnected) return;
@@ -905,111 +856,11 @@ function categoryEmoji(c) {
   return c && c.custom_emoji_id ? { id: c.custom_emoji_id, emoji: c.emoji_fallback || '🛍' }
     : (state.emojiSettings?.categories?.[lower(c?.name).trim()] || { id: state.emojiSettings?.values?.catalog || '5983399041197675256', emoji: '🛍' });
 }
-function emojiField(initial, onChange, { reset } = {}) {
-  let value = initial;
-  const box = h('div', { class: 'emoji-field' });
-  function draw() {
-    box.replaceChildren(emojiThumb(value.id, value.emoji, true),
-      h('div', { class: 'emoji-field-info' }, h('div', {}, 'Premium emoji'), h('code', {}, value.id)),
-      h('button', { class: 'btn', type: 'button', onclick: () => openEmojiPicker(chosen => { value = chosen; onChange(chosen); draw(); }) }, 'Выбрать'));
-    if (reset) box.append(h('button', { class: 'btn sm', type: 'button', onclick: () => { value = reset(); onChange(null); draw(); } }, 'По умолчанию'));
-  }
-  draw(); return box;
-}
-async function openEmojiPicker(onSelect) {
-  // A nested picker must not destroy unsaved category/product fields.
-  const parentClose = closeOverlay;
-  const close = () => { overlay.remove(); closeOverlay = parentClose; };
-  const grid = h('div', { class: 'emoji-grid', 'aria-label': 'Каталог премиум-эмодзи' });
-  const status = h('p', { class: 'muted emoji-status', role: 'status' }, 'Загружаем каталог…');
-  const search = h('input', { type: 'search', placeholder: 'Поиск: эмодзи, ID, тип', 'aria-label': 'Поиск эмодзи' });
-  const pack = h('select', { 'aria-label': 'Набор эмодзи' });
-  const group = h('select', { 'aria-label': 'Тип эмодзи' });
-  const manual = h('input', { placeholder: 'ID или разметка Telegram', 'aria-label': 'ID эмодзи', inputMode: 'text' });
-  const manualView = h('div', { class: 'emoji-manual-preview' });
-  const previous = h('button', { class: 'btn', type: 'button' }, '← Назад');
-  const next = h('button', { class: 'btn', type: 'button' }, 'Далее →');
-  const pageInfo = h('span', { class: 'dim' });
-  const box = h('div', { class: 'modal emoji-picker', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Выбор премиум-эмодзи' },
-    h('div', { class: 'emoji-picker-head' }, h('h3', {}, 'Премиум-эмодзи'), h('button', { class: 'btn sm', type: 'button', 'aria-label': 'Закрыть выбор эмодзи', onclick: close }, '×')),
-    h('p', { class: 'muted' }, 'Настоящие статичные миниатюры из Telegram. Если превью недоступно, значок помечен пунктиром — это обычная замена, не оригинал.'),
-    h('div', { class: 'emoji-filters' }, search, pack, group), status, grid,
-    h('div', { class: 'emoji-pagination' }, previous, pageInfo, next),
-    h('div', { class: 'section' }, h('label', { class: 'lbl' }, 'Свой эмодзи'), manual,
-      h('p', { class: 'muted' }, 'Отправьте эмодзи боту — он вернёт ID. Можно вставить ID, tg-emoji или custom-emoji-element.'),
-      h('button', { class: 'btn', type: 'button', onclick: inspectManual }, 'Показать предпросмотр'), manualView));
-  const overlay = h('div', { class: 'overlay center emoji-overlay', onmousedown: e => { if (e.target === overlay) close(); } }, box);
-  document.body.append(overlay); closeOverlay = close; search.focus();
-  let rows = [], currentPage = 0, generation = 0;
-  const size = 48;
-  const groupNames = { general: 'Общие', finance: 'Финансы', navigation: 'Навигация', documents: 'Документы', media: 'Медиа', tech: 'Технологии', status: 'Статусы' };
-  function draw() {
-    const gen = ++generation;
-    const q = lower(search.value).trim();
-    const filtered = rows.filter(e => (!pack.value || e.pack === pack.value) && (!group.value || e.category === group.value) &&
-      (!q || lower([e.id, e.emoji, e.pack, e.category, groupNames[e.category] || ''].join(' ')).includes(q)));
-    const pages = Math.max(1, Math.ceil(filtered.length / size)); currentPage = Math.min(currentPage, pages - 1);
-    const visible = filtered.slice(currentPage * size, (currentPage + 1) * size);
-    previous.disabled = !currentPage; next.disabled = currentPage + 1 >= pages;
-    pageInfo.textContent = `${currentPage + 1} / ${pages}`;
-    status.textContent = `Найдено: ${filtered.length}. Нажмите на эмодзи, чтобы выбрать. Порядок внутри набора сохранён.`;
-    grid.replaceChildren();
-    if (!visible.length) { grid.append(h('p', { class: 'muted' }, 'Ничего не найдено. Попробуйте другой фильтр или вставьте ID.')); return; }
-    // Batch metadata once per visible page; files load four at a time and are cached.
-    api('/emojis/previews', { method: 'POST', body: { ids: visible.map(e => e.id) } }).then(() => {}).catch(() => {
-      if (gen === generation && overlay.isConnected) status.textContent = 'Telegram не отдаёт превью. Пунктирные значки — обычные замены. Повторите позже.';
-    });
-    grid.append(...visible.map(e => h('button', { class: 'emoji-tile', type: 'button', title: `${e.pack} · ${e.emoji} · ${e.id}`, 'aria-label': `Выбрать ${e.emoji}, ID ${e.id}`,
-      onclick: () => { close(); onSelect(e); } }, emojiThumb(e.id, e.emoji, true))));
-  }
-  async function inspectManual() {
-    const raw = manual.value.trim();
-    const tagId = raw.match(/(?:emoji-id|data-doc-id)\s*=\s*["'](\d+)["']/);
-    const id = tagId ? tagId[1] : raw;
-    if (!/^[1-9][0-9]{0,19}$/.test(id)) { manualView.replaceChildren(h('p', { class: 'muted' }, 'Введите ID из 1–20 цифр или разметку Telegram.')); return; }
-    manualView.textContent = 'Проверяем в Telegram…';
-    try {
-      const meta = (await api('/emojis/previews', { method: 'POST', body: { ids: [id] } }))[id];
-      if (!meta?.available) throw new Error('Telegram не нашёл этот эмодзи. Проверьте ID.');
-      const chosen = { id, emoji: meta.emoji || '◌', pack: meta.pack || '' };
-      manualView.replaceChildren(emojiThumb(id, chosen.emoji, true), h('code', {}, id),
-        h('button', { class: 'btn primary', type: 'button', onclick: () => { close(); onSelect(chosen); } }, 'Использовать'));
-    } catch (e) { manualView.replaceChildren(h('p', { class: 'muted' }, e.message)); }
-  }
-  search.addEventListener('input', () => { currentPage = 0; draw(); });
-  pack.addEventListener('change', () => { currentPage = 0; draw(); });
-  group.addEventListener('change', () => { currentPage = 0; draw(); });
-  previous.addEventListener('click', () => { currentPage--; draw(); }); next.addEventListener('click', () => { currentPage++; draw(); });
-  try {
-    rows = await loadEmojiCatalog();
-    if (!overlay.isConnected) return;
-    pack.append(h('option', { value: '' }, 'Все наборы'), ...[...new Set(rows.map(e => e.pack))].map(v => h('option', { value: v }, v)));
-    group.append(h('option', { value: '' }, 'Все типы'), ...[...new Set(rows.map(e => e.category))].map(v => h('option', { value: v }, groupNames[v] || v)));
-    draw();
-  } catch (e) { status.textContent = e.message; }
-}
-function renderEmojis() {
-  const settings = state.emojiSettings;
-  if (!settings) return h('div', { class: 'card empty' }, 'Не удалось загрузить настройки эмодзи. Нажмите «Обновить».');
-  const priority = ['description', 'dollar', 'stock'];
-  const keys = [...priority, ...Object.keys(settings.labels).filter(k => !priority.includes(k))];
-  const cards = keys.map(key => h('div', { class: 'card emoji-setting' }, h('h4', {}, settings.labels[key]),
-    emojiField({ id: settings.values[key], emoji: key === 'stock' ? '⚙' : key === 'dollar' ? '💵' : '◌' }, async chosen => {
-      await act(() => api('/emojis/settings', { method: 'PUT', body: { [key]: chosen?.id || settings.defaults[key] } }), 'Эмодзи сохранён. Бот применит его на следующем экране.');
-    }, { reset: () => ({ id: settings.defaults[key], emoji: '◌' }) })));
-  return h('div', {}, h('div', { class: 'card emoji-intro' }, h('h3', {}, 'Эмодзи магазина'),
-    h('p', { class: 'muted' }, 'Значок категории задаётся в «Категории → Изменить». Все товары наследуют его автоматически. Здесь — значки карточки и интерфейса.'),
-    h('p', { class: 'muted' }, 'Карточка: эмодзи категории + название → звезда + описание → доллар + цена → шестерёнка + остаток.'),
-    h('button', { class: 'btn', type: 'button', onclick: () => openEmojiPicker(e => { navigator.clipboard?.writeText(e.id).then(() => toast('ID скопирован: ' + e.id)).catch(() => toast('ID: ' + e.id)); }) }, 'Открыть каталог и скопировать ID')),
-    h('div', { class: 'emoji-settings-grid' }, cards));
-}
-
 /* ==================================================================== каркас == */
 const PAGES = {
   dashboard: { title: "Обзор магазина", render: renderDashboard },
   products: { title: "Товары", render: renderProducts },
   categories: { title: "Категории", render: renderCategories },
-  emojis: { title: "Премиум-эмодзи", render: renderEmojis },
   customers: { title: "Покупатели", render: renderCustomers },
   orders: { title: "Покупки", render: renderOrders },
 };
@@ -1030,7 +881,8 @@ function render() {
   const page = PAGES[state.page] || PAGES.dashboard;
   $("page-title").textContent = page.title;
   $("page-tools").replaceChildren(...pageTools().childNodes);
-  $("page").replaceChildren(page.render());
+  const primary = state.page === "dashboard" ? "dashboard" : state.page;
+  $("page").replaceChildren(loadedData.has(primary) ? page.render() : h("div", { class: "empty" }, "Загрузка данных…"));
   for (const button of $("nav").querySelectorAll("button")) button.setAttribute("aria-current", String(button.dataset.page === state.page));
 }
 function updateBadges() {
@@ -1047,7 +899,14 @@ function navigate(page) { location.hash = "#/" + page; }
 function route() {
   const page = location.hash.replace(/^#\/?/, "");
   state.page = PAGES[page] ? page : "dashboard";
-  if (!$("app").hidden) render();
+  if (!$("app").hidden) {
+    const requestedPage = state.page;
+    render();
+    $("page").classList.add("loading");
+    $("page-tools").classList.add("loading");
+    loadAll({ silent: true }).catch(error => { if (error.status !== 401) toast(error.message, "error"); })
+      .finally(() => { if (requestedPage === state.page) { $("page").classList.remove("loading");$("page-tools").classList.remove("loading"); } });
+  }
 }
 
 $("loginForm").addEventListener("submit", login);
