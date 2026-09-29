@@ -18,6 +18,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
 from aiogram.enums import ParseMode
 from aiogram.types import (
     CallbackQuery,
@@ -25,6 +26,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    InlineQuery,
+    InlineQueryResultsButton,
 )
 
 from config import COVERS_DIR, settings
@@ -34,10 +37,14 @@ from shop_emoji import DEFAULT_EMOJI, EMOJI_FALLBACKS, EMOJI_LABELS
 from emoji_library import EmojiLibrary, validate_emoji_id
 from rich_description import description_to_html
 from exchange_rates import ExchangeRates
+from inline_emoji import InlineCatalog, InlineThumbnails, public_base, result_for, valid_thumbnail
 
 exchange_rates = ExchangeRates()
 
 emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.json")
+
+inline_catalog = InlineCatalog(emoji_library.items)
+inline_thumbnails = InlineThumbnails()
 
 router = Router()
 database: Database | None = None
@@ -320,9 +327,103 @@ async def show_category(message: Message, category_id: int) -> None:
         await message.answer(caption, reply_markup=keyboard)
 
 
+@router.message(Command("inline"))
+async def inline_help(message: Message, error: bool = False) -> None:
+    me = await message.bot.me()
+    name = "@" + me.username
+    notice = ("Telegram отклонил inline-ответ. Проверьте HTTPS-адрес миниатюр и права бота. Поддержка премиум-эмодзи в прямых сообщениях "
+              "бота не гарантирует поддержку inline. По правилам Bot API для этого режима "
+              "нужен подходящий дополнительный username на Fragment.\n\n") if error else ""
+    try:
+        public_base(settings.public_base_url)
+        setup = ""
+    except ValueError:
+        setup = "\n\nВладелец должен настроить PUBLIC_BASE_URL — HTTPS-адрес приложения без /admin."
+    await message.answer(
+        notice + "<b>Текст с премиум-эмодзи прямо в чате</b>\n\n"
+        f"Напиши в нужном чате: <code>{name} Привет! | звезда</code>\n"
+        "Или ищи по символу / набору: <code>Привет! | ⭐ TgAndroidIcons</code>.\n"
+        "Выбери вариант с нужной миниатюрой — нажатие сразу отправляет всё сообщение.\n\n"
+        "По умолчанию эмодзи добавляется в конец. Чтобы поставить его внутри текста: "
+        f"<code>{name} Привет {{эмодзи}} друг! | звезда</code>.\n"
+        "Один выбранный вариант эмодзи на сообщение; все {эмодзи} заменяются им.\n"
+        "Наборы и их порядок сохранены. Миниатюры статичные, в тексте отправляется исходный ID.\n\n"
+        "В BotFather нужно включить /setinline. Отправка будет с пометкой via бота. "
+        "Доступность премиум-эмодзи в inline определяется Telegram." + setup,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Попробовать в чате", switch_inline_query="Привет! | ⭐")
+        ]]),
+    )
+
+
+async def inline_notice(query: InlineQuery, label: str, parameter: str = "inline_help") -> None:
+    try:
+        await query.answer([], cache_time=0, is_personal=True,
+                           button=InlineQueryResultsButton(text=label, start_parameter=parameter))
+    except TelegramAPIError:
+        # The user can keep typing; old queries may expire before a reply arrives.
+        logging.debug("Inline notice could not be delivered")
+
+
+@router.inline_query()
+async def inline_compose(query: InlineQuery) -> None:
+    try:
+        base = public_base(settings.public_base_url)
+        if not settings.admin_secret or settings.admin_secret.startswith("change-this"):
+            raise ValueError("Не настроен ключ приложения")
+        text, rows, next_offset = inline_catalog.page(query.query, query.offset)
+    except ValueError:
+        await inline_notice(query, "Настройка inline / помощь")
+        return
+    if not rows:
+        await inline_notice(query, "Ничего не найдено · помощь")
+        return
+    try:
+        metadata = await asyncio.wait_for(emoji_library.previews(query.bot, [row["id"] for row in rows]), timeout=4)
+        results = []
+        for row in rows:
+            sticker = emoji_library.metadata.get(row["id"])
+            emoji = metadata[row["id"]].get("emoji")
+            if not metadata[row["id"]]["available"] or not emoji or len(emoji) > 32:
+                continue
+            if (getattr(sticker, "is_animated", False) or getattr(sticker, "is_video", False)) and not getattr(sticker, "thumbnail", None):
+                continue
+            results.append(result_for(query.query, text, {**row, "emoji": emoji}, inline_catalog, base, settings.admin_secret))
+        if not results:
+            await inline_notice(query, "Миниатюры недоступны · помощь")
+            return
+        await query.answer(results, cache_time=10, is_personal=True, next_offset=next_offset,
+                           button=InlineQueryResultsButton(text="Как пользоваться", start_parameter="inline_help"))
+    except TelegramBadRequest as exc:
+        if "query" in exc.message.lower() and "invalid" in exc.message.lower():
+            return
+        logging.warning("Telegram rejected inline emoji results: %s", exc.message)
+        await inline_notice(query, "Telegram отклонил отправку · помощь", "inline_error")
+    except (TelegramAPIError, asyncio.TimeoutError, ValueError):
+        await inline_notice(query, "Эмодзи временно недоступны · помощь")
+
+
+async def inline_emoji_thumbnail(request: web.Request) -> web.Response:
+    emoji_id = request.match_info["id"]
+    if not valid_thumbnail(settings.admin_secret, inline_catalog.ids, emoji_id,
+                           request.query.get("expires", ""), request.query.get("sig", "")):
+        raise web.HTTPNotFound()
+    if not telegram_bot:
+        raise web.HTTPServiceUnavailable()
+    try:
+        data = await asyncio.wait_for(inline_thumbnails.get(telegram_bot, emoji_library, emoji_id), timeout=15)
+    except (ValueError, TelegramAPIError, asyncio.TimeoutError):
+        raise web.HTTPNotFound()
+    return web.Response(body=data, content_type="image/jpeg", headers={
+        "Cache-Control": "public, max-age=900", "X-Content-Type-Options": "nosniff"})
+
+
 @router.message(Command("start", "menu"))
 async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
+    if message.text and message.text.split(maxsplit=1)[-1] in {"inline_help", "inline_error"} and len(message.text.split(maxsplit=1)) == 2:
+        await inline_help(message, error=message.text.endswith("inline_error"))
+        return
     await get_database().upsert_customer(
         message.from_user.id,
         message.from_user.username,
@@ -811,6 +912,7 @@ async def start_health_server() -> web.AppRunner:
     app.router.add_get("/api/admin/emojis/catalog", admin_emoji_catalog)
     app.router.add_post("/api/admin/emojis/previews", admin_emoji_previews)
     app.router.add_get("/api/admin/emojis/image/{id}", admin_emoji_image)
+    app.router.add_get("/api/inline/emoji/{id}.jpg", inline_emoji_thumbnail)
     app.router.add_post("/api/payments/crypto/{secret}", crypto_webhook)
     runner = web.AppRunner(app)
     await runner.setup()
