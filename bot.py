@@ -587,6 +587,16 @@ async def admin_dashboard(request: web.Request) -> web.Response:
     return web.json_response(await get_database().dashboard())
 
 
+async def admin_analytics(request: web.Request) -> web.Response:
+    require_admin(request)
+    try:
+        days = int(request.query.get("days", "30"))
+        tz_offset = int(request.query.get("tz", "0"))
+    except ValueError:
+        return web.json_response({"error": "Некорректный период"}, status=400)
+    return web.json_response(await get_database().analytics(days, tz_offset))
+
+
 async def admin_categories(request: web.Request) -> web.Response:
     require_admin(request)
     if request.method == "GET":
@@ -660,6 +670,19 @@ async def admin_grant_balance(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc) or "Некорректная сумма"}, status=400)
 
 
+async def admin_grant_balance_by_id(request: web.Request) -> web.Response:
+    require_admin(request)
+    data = await json_body(request)
+    try:
+        amount = Decimal(str(data.get("amount", "")))
+        if amount <= 0:
+            raise ValueError("Сумма должна быть больше нуля")
+        result = await get_database().grant_balance_by_id(int(request.match_info["telegram_id"]), amount, str(data.get("reason", "")))
+        return web.json_response(result)
+    except (InvalidOperation, ValueError) as exc:
+        return web.json_response({"error": str(exc) or "Некорректная сумма"}, status=400)
+
+
 async def admin_orders(request: web.Request) -> web.Response:
     require_admin(request)
     return web.json_response(await get_database().orders())
@@ -714,6 +737,7 @@ async def start_health_server() -> web.AppRunner:
     app.router.add_get("/admin.js", admin_script)
     app.router.add_post("/api/admin/login", admin_login)
     app.router.add_get("/api/admin/dashboard", admin_dashboard)
+    app.router.add_get("/api/admin/analytics", admin_analytics)
     app.router.add_get("/api/admin/categories", admin_categories)
     app.router.add_post("/api/admin/categories", admin_categories)
     app.router.add_put("/api/admin/categories/{id}", admin_category)
@@ -725,6 +749,7 @@ async def start_health_server() -> web.AppRunner:
     app.router.add_put("/api/admin/products/{id}/stock", admin_stock)
     app.router.add_get("/api/admin/customers", admin_customers)
     app.router.add_post("/api/admin/customers/{username}/balance", admin_grant_balance)
+    app.router.add_post("/api/admin/customers/id/{telegram_id}/balance", admin_grant_balance_by_id)
     app.router.add_get("/api/admin/orders", admin_orders)
     app.router.add_post("/api/payments/crypto/{secret}", crypto_webhook)
     runner = web.AppRunner(app)

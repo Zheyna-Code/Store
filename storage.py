@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -142,6 +142,52 @@ class Database:
                 "orders": totals["orders"], "today_visits": visits,
                 "top_categories": [dict(row) | {"revenue": str(row["revenue"])} for row in top_categories]}
 
+    async def analytics(self, days: int = 30, tz_offset: int = 0) -> dict[str, Any]:
+        """Данные для графиков: по дням, сравнение с прошлым периодом, статусы и топ товаров."""
+        days = max(1, min(int(days), 365))
+        tz_offset = max(-14 * 60, min(int(tz_offset), 14 * 60))
+        shift = timedelta(minutes=tz_offset)
+        today = (datetime.now(timezone.utc) + shift).date()
+        first = today - timedelta(days=days - 1)
+        current_start = datetime.combine(first, time.min, tzinfo=timezone.utc) - shift
+        previous_start = current_start - timedelta(days=days)
+        p = self._pool()
+        day_sql = "((created_at AT TIME ZONE 'UTC') + make_interval(mins => $2::int))::date"
+        paid = await p.fetch(f"""SELECT {day_sql} AS day, COUNT(*) AS orders, COALESCE(SUM(amount), 0) AS revenue
+            FROM orders WHERE status='paid' AND created_at >= $1 GROUP BY 1""", previous_start, tz_offset)
+        customers = await p.fetch(f"""SELECT {day_sql} AS day, COUNT(*) AS n
+            FROM customers WHERE created_at >= $1 GROUP BY 1""", previous_start, tz_offset)
+        visits = await p.fetch(f"""SELECT {day_sql} AS day, COUNT(DISTINCT COALESCE(visitor_key, id::text)) AS n
+            FROM page_visits WHERE created_at >= $1 GROUP BY 1""", previous_start, tz_offset)
+        statuses = await p.fetch("SELECT status, COUNT(*) AS n FROM orders WHERE created_at >= $1 GROUP BY status", current_start)
+        top = await p.fetch("""SELECT COALESCE(p.name, 'Удалённый товар') AS name, COUNT(o.id) AS sales, COALESCE(SUM(o.amount), 0) AS revenue
+            FROM orders o LEFT JOIN products p ON p.id=o.product_id
+            WHERE o.status='paid' AND o.created_at >= $1 GROUP BY p.id, p.name ORDER BY revenue DESC, sales DESC LIMIT 8""", current_start)
+        series = {first + timedelta(days=i): {"revenue": 0.0, "orders": 0, "customers": 0, "visits": 0} for i in range(days)}
+        current = {"revenue": 0.0, "orders": 0, "customers": 0, "visits": 0}
+        previous = dict(current)
+
+        def add(rows: list[asyncpg.Record], fields: dict[str, str]) -> None:
+            for row in rows:
+                bucket = current if row["day"] >= first else previous
+                for target, source in fields.items():
+                    value = float(row[source]) if target == "revenue" else int(row[source])
+                    bucket[target] += value
+                    if row["day"] >= first and row["day"] in series:
+                        series[row["day"]][target] += value
+
+        add(paid, {"revenue": "revenue", "orders": "orders"})
+        add(customers, {"customers": "n"})
+        add(visits, {"visits": "n"})
+        return {
+            "days": days,
+            "series": [{"date": day.isoformat(), **values} for day, values in sorted(series.items())],
+            "statuses": {row["status"]: row["n"] for row in statuses},
+            "top_products": [{"name": row["name"], "sales": row["sales"], "revenue": float(row["revenue"])} for row in top],
+            "current": current,
+            "previous": previous,
+        }
+
     async def list_categories(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("SELECT * FROM categories ORDER BY sort_order, name")
         return [public_row(row) for row in rows]
@@ -254,6 +300,14 @@ class Database:
             row = await connection.fetchrow("UPDATE customers SET balance=balance+$1 WHERE LOWER(username)=LOWER($2) RETURNING *", amount, username.lstrip("@"))
             if not row:
                 raise ValueError("Покупатель с таким username не найден")
+            await connection.execute("INSERT INTO balance_transactions(customer_id, amount, reason) VALUES($1,$2,$3)", row["telegram_id"], amount, reason or "Выдано администратором")
+            return public_row(row)
+
+    async def grant_balance_by_id(self, telegram_id: int, amount: Decimal, reason: str) -> dict[str, Any]:
+        async with self._pool().acquire() as connection, connection.transaction():
+            row = await connection.fetchrow("UPDATE customers SET balance=balance+$1 WHERE telegram_id=$2 RETURNING *", amount, telegram_id)
+            if not row:
+                raise ValueError("Покупатель не найден")
             await connection.execute("INSERT INTO balance_transactions(customer_id, amount, reason) VALUES($1,$2,$3)", row["telegram_id"], amount, reason or "Выдано администратором")
             return public_row(row)
 
