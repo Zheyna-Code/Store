@@ -44,7 +44,7 @@ const fmtDate = value => {
   return isNaN(date) ? "" : date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 };
 const STATUS = { paid: "оплачен", pending: "ждёт оплаты", cancelled: "отменён", paid_no_stock: "оплачен, нет товара" };
-const STATUS_COLOR = { paid: "#5fb27b", pending: "#e2b856", cancelled: "#d0665b", paid_no_stock: "#a583d6" };
+const STATUS_COLOR = { paid: "#ffffff", pending: "#b4b8c1", cancelled: "#6b6f79", paid_no_stock: "#8f939d" };
 const clientName = o => o.username ? "@" + o.username : (o.first_name || "—");
 
 /* ================================================================ уведомления == */
@@ -163,9 +163,9 @@ let chartUid = 0;
 function niceStep(v) { const p = 10 ** Math.floor(Math.log10(v)); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
 
 /** Линейный график с областью или столбцы; points = [{label, value}]. */
-function timeChart(points, { type = "line", fmt = short, color = "#93b7ea", integer = false, tipFmt = fmt } = {}) {
+function timeChart(points, { type = "line", fmt = short, color = "#ffffff", integer = false, tipFmt = fmt, height = 230 } = {}) {
   const wrap = h("div", { class: "chart" });
-  const W = 720, H = 230, L = 46, R = 10, T = 12, B = 26;
+  const W = 720, H = height, L = 46, R = 10, T = 12, B = 26;
   const max = Math.max(...points.map(p => p.value), 0);
   if (!max) { wrap.append(h("div", { class: "empty" }, "За выбранный период данных пока нет.")); return wrap; }
   const step = niceStep(Math.max(max / 4, integer ? 1 : 0.0001));
@@ -194,17 +194,17 @@ function timeChart(points, { type = "line", fmt = short, color = "#93b7ea", inte
   if (type === "line") {
     const line = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
     svg.append(s("path", { d: `${line} L${x(points.length - 1)},${y(0)} L${x(0)},${y(0)} Z`, fill: `url(#${id})` }));
-    svg.append(s("path", { d: line, fill: "none", stroke: color, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-    marker = s("circle", { r: 5, fill: color, stroke: "#0b101c", "stroke-width": 2, opacity: 0 });
+    svg.append(s("path", { d: line, fill: "none", stroke: color, "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round", class: "glow" }));
+    marker = s("circle", { r: 5, fill: color, stroke: "#050506", "stroke-width": 2, opacity: 0 });
   } else {
     const bw = Math.min(28, slot * 0.7);
     var bars = points.map((p, i) => {
-      const bar = s("rect", { x: bx(i) - bw / 2, width: bw, y: y(p.value), height: Math.max(0, y(0) - y(p.value)), rx: 3, fill: color, opacity: .8 });
+      const bar = s("rect", { x: bx(i) - bw / 2, width: bw, y: y(p.value), height: Math.max(0, y(0) - y(p.value)), rx: 4, fill: color, opacity: .8 });
       svg.append(bar); return bar;
     });
   }
   if (marker) svg.append(marker);
-  const guide = s("line", { y1: T, y2: H - B, stroke: "#3f5573", "stroke-dasharray": "3 3", opacity: 0 });
+  const guide = s("line", { y1: T, y2: H - B, stroke: "rgba(255,255,255,.35)", "stroke-dasharray": "3 3", opacity: 0 });
   svg.insertBefore(guide, marker || null);
   const tip = h("div", { class: "tip", hidden: true });
   const hit = s("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" });
@@ -232,15 +232,15 @@ function donut(entries) {
   if (!total) return h("div", { class: "empty" }, "Заказов за период нет.");
   const r = 54, c = 2 * Math.PI * r;
   const svg = s("svg", { viewBox: "0 0 150 150", role: "img", "aria-label": "Статусы заказов" });
-  svg.append(s("circle", { cx: 75, cy: 75, r, fill: "none", stroke: "#263750", "stroke-width": 20 }));
+  svg.append(s("circle", { cx: 75, cy: 75, r, fill: "none", stroke: "rgba(255,255,255,.08)", "stroke-width": 20 }));
   let offset = 0;
   for (const e of entries) {
     const len = (e.value / total) * c;
     svg.append(s("circle", { cx: 75, cy: 75, r, fill: "none", stroke: e.color, "stroke-width": 20, "stroke-dasharray": `${len} ${c - len}`, "stroke-dashoffset": -offset, transform: "rotate(-90 75 75)" }));
     offset += len;
   }
-  const t1 = s("text", { x: 75, y: 73, "text-anchor": "middle", fill: "#edf3fd", "font-size": 24, "font-family": "Inter, system-ui, sans-serif" }); t1.textContent = total;
-  const t2 = s("text", { x: 75, y: 92, "text-anchor": "middle", fill: "#71829d", "font-size": 11 }); t2.textContent = "заказов";
+  const t1 = s("text", { x: 75, y: 73, "text-anchor": "middle", fill: "#ffffff", "font-size": 24, "font-family": "Inter, system-ui, sans-serif" }); t1.textContent = total;
+  const t2 = s("text", { x: 75, y: 92, "text-anchor": "middle", fill: "#8b8f99", "font-size": 11 }); t2.textContent = "заказов";
   svg.append(t1, t2);
   return h("div", { class: "donut-wrap" }, svg,
     h("div", { class: "legend" }, entries.map(e => h("div", {}, h("i", { style: `background:${e.color}` }), e.label, h("em", {}, `${e.value} · ${Math.round((e.value / total) * 100)}%`)))));
@@ -256,14 +256,44 @@ function hbars(items) {
 
 
 /* ===================================================================== обзор == */
-function delta(current, previous) {
-  if (!previous && !current) return h("small", { class: "flat" }, "— как и раньше");
-  if (!previous) return h("small", { class: "up" }, "▲ новое за период");
-  const pct = Math.round(((current - previous) / previous) * 100);
-  if (pct === 0) return h("small", { class: "flat" }, "без изменений к прошлому периоду");
-  return h("small", { class: pct > 0 ? "up" : "down" }, `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}% к прошлому периоду`);
+function spark(values, color = "#ffffff") {
+  const W = 100, H = 36, P = 3;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, class: "spark", "aria-hidden": "true", preserveAspectRatio: "none" });
+  const max = Math.max(...values, 0), min = Math.min(...values, 0), span = max - min || 1;
+  const x = i => P + (values.length === 1 ? (W - 2 * P) / 2 : (i * (W - 2 * P)) / (values.length - 1));
+  const y = v => max === min ? H - P : H - P - ((v - min) / span) * (H - 2 * P);
+  const line = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const id = "sp" + (++chartUid);
+  svg.append(s("defs", {}, s("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 1 },
+    s("stop", { offset: "0%", "stop-color": color, "stop-opacity": ".35" }), s("stop", { offset: "100%", "stop-color": color, "stop-opacity": "0" }))));
+  svg.append(s("path", { d: `${line} L${x(values.length - 1)},${H} L${x(0)},${H} Z`, fill: `url(#${id})` }));
+  svg.append(s("path", { d: line, fill: "none", stroke: color, "stroke-width": 1.8, "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }));
+  return svg;
 }
-function kpi(label, value, extra) { return h("div", { class: "kpi" }, h("span", {}, label), h("b", {}, value), extra || ""); }
+function delta(current, previous) {
+  if (!previous && !current) return h("span", { class: "dchip flat" }, "— как раньше");
+  if (!previous) return h("span", { class: "dchip up" }, "▲ новое");
+  const pct = Math.round(((current - previous) / previous) * 100);
+  if (pct === 0) return h("span", { class: "dchip flat" }, "0%");
+  return h("span", { class: "dchip " + (pct > 0 ? "up" : "down") }, `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}%`);
+}
+const ICONS = {
+  money: '<path d="M12 2v20"/><path d="M17 6.5c-.8-1.4-2.6-2.3-5-2.3-2.8 0-4.6 1.3-4.6 3.3 0 4.6 10 2 10 6.6 0 2-2 3.4-5 3.4-2.6 0-4.6-1-5.4-2.6"/>',
+  bag: '<path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/>',
+  users: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>',
+  eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>',
+};
+function icon(name) {
+  const box = h("span", { class: "ico" });
+  box.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  return box;
+}
+function kpi(label, ico, value, chip, series, note) {
+  return h("div", { class: "kpi" },
+    h("div", { class: "khead" }, icon(ico), h("span", { class: "klabel" }, label)),
+    h("b", {}, value),
+    h("div", { class: "kfoot" }, h("div", { class: "kdelta" }, chip, h("small", {}, note)), series ? spark(series) : ""));
+}
 
 function goOrders(status) { state.orderStatus = status; navigate("orders"); }
 function goProducts(filter) { state.productFilter = filter; navigate("products"); }
@@ -282,25 +312,32 @@ function attentionItems() {
   return items;
 }
 
+function recentOrders() {
+  const list = [...state.orders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 6);
+  const cls = { paid: "paid", pending: "pending", cancelled: "cancelled", paid_no_stock: "nostock" };
+  const short_ = { paid: "оплачен", pending: "ждёт оплаты", cancelled: "отменён", paid_no_stock: "нет товара" };
+  return h("div", { class: "card col-4" }, h("h2", {}, "Последние заказы"), h("p", { class: "sub" }, "Нажми, чтобы открыть все покупки"),
+    list.length ? h("div", { class: "rlist" }, list.map(o => h("button", { type: "button", class: "rrow", onclick: () => navigate("orders") },
+      h("span", { class: "ava" }, String(clientName(o)).replace("@", "").charAt(0).toUpperCase() || "?"),
+      h("span", { class: "who" }, h("b", {}, clientName(o)), h("small", {}, o.product_name || "—")),
+      h("span", { class: "amt" }, h("b", {}, money(o.amount)), h("span", { class: "status " + (cls[o.status] || "") }, short_[o.status] || o.status)))))
+      : h("div", { class: "empty" }, "Покупок пока нет."));
+}
+function popularProducts(an) {
+  const items = an.top_products.slice(0, 6);
+  const max = Math.max(...items.map(p => p.revenue), 1);
+  return h("div", { class: "card col-4" }, h("h2", {}, "Популярные товары"), h("p", { class: "sub" }, `По выручке за ${an.days} дн.`),
+    items.length ? h("div", { class: "plist" }, items.map((p, i) => h("div", { class: "prow" },
+      h("span", { class: "rank" }, i + 1),
+      h("div", { class: "pinfo" }, h("div", { class: "pt" }, h("b", { title: p.name }, p.name), h("span", {}, money(p.revenue))),
+        h("div", { class: "bar" }, h("i", { style: `width:${Math.max(4, (p.revenue / max) * 100)}%` })),
+        h("small", {}, `${p.sales} шт.`)))))
+      : h("div", { class: "empty" }, "Продаж за период пока нет."));
+}
+
 function renderDashboard() {
   const d = state.dashboard, an = state.analytics;
   const page = h("div", {});
-  const kpis = h("div", { class: "kpis" });
-  if (an) {
-    const avg = an.current.orders ? an.current.revenue / an.current.orders : 0;
-    const avgPrev = an.previous.orders ? an.previous.revenue / an.previous.orders : 0;
-    kpis.append(
-      kpi(`Выручка за ${an.days} дн.`, money(an.current.revenue), delta(an.current.revenue, an.previous.revenue)),
-      kpi("Оплаченных покупок", an.current.orders, delta(an.current.orders, an.previous.orders)),
-      kpi("Средний чек", money(avg), delta(avg, avgPrev)),
-      kpi("Новых покупателей", an.current.customers, delta(an.current.customers, an.previous.customers)),
-      kpi("Посетителей", an.current.visits, delta(an.current.visits, an.previous.visits)));
-  }
-  kpis.append(
-    kpi("Сегодня", money(d.today_revenue), h("small", {}, `посетителей: ${d.today_visits}`)),
-    kpi("Всего заработано", money(d.revenue), h("small", {}, `${d.orders} ${plural(d.orders, "оплаченная покупка", "оплаченные покупки", "оплаченных покупок")}`)));
-  page.append(kpis);
-
   const todo = attentionItems();
   const attention = h("div", { class: "card col-4" }, h("h2", {}, "Требует внимания"), h("p", { class: "sub" }, "Нажми, чтобы перейти к списку"),
     h("div", { class: "todo" }, todo.length
@@ -308,30 +345,42 @@ function renderDashboard() {
       : h("div", { class: "ok" }, "Всё в порядке, срочных дел нет.")));
   const topCategories = h("div", { class: "card col-6" }, h("h2", {}, "Топ категорий"), h("p", { class: "sub" }, "По выручке за всё время"),
     hbars((d.top_categories || []).slice(0, 8).map(c => ({ name: c.name, value: num(c.revenue), text: `${money(c.revenue)} · ${c.sales} шт.` }))));
+  const totals = h("div", { class: "mstats" },
+    h("div", {}, h("span", {}, "Сегодня"), h("b", {}, money(d.today_revenue)), h("small", {}, `посетителей: ${d.today_visits}`)),
+    h("div", {}, h("span", {}, "Всего заработано"), h("b", {}, money(d.revenue)), h("small", {}, `${d.orders} ${plural(d.orders, "оплаченная покупка", "оплаченные покупки", "оплаченных покупок")}`)));
 
-  const grid = h("div", { class: "grid" });
-  if (an) {
-    const pts = key => an.series.map(p => ({ label: dayLabel(p.date), title: dayLabel(p.date), value: p[key] }));
-    grid.append(
-      h("div", { class: "card col-8" }, h("h2", {}, "Выручка по дням"), h("p", { class: "sub" }, `Оплаченные заказы за ${an.days} дн.`),
-        timeChart(pts("revenue"), { type: "line", tipFmt: money })),
-      attention,
-      h("div", { class: "card col-6" }, h("h2", {}, "Покупки по дням"), h("p", { class: "sub" }, "Количество оплаченных заказов"),
-        timeChart(pts("orders"), { type: "bar", integer: true, color: "#7fd1b9", tipFmt: v => `${v} ${plural(v, "покупка", "покупки", "покупок")}` })),
-      h("div", { class: "card col-6" }, h("h2", {}, "Посетители"), h("p", { class: "sub" }, "Уникальные посетители сайта по дням"),
-        timeChart(pts("visits"), { type: "line", integer: true, color: "#a583d6", tipFmt: v => `${v} ${plural(v, "посетитель", "посетителя", "посетителей")}` })),
-      h("div", { class: "card col-6" }, h("h2", {}, "Новые покупатели"), h("p", { class: "sub" }, "Кто впервые запустил бота"),
-        timeChart(pts("customers"), { type: "bar", integer: true, color: "#e2b856", tipFmt: v => `${v} ${plural(v, "покупатель", "покупателя", "покупателей")}` })),
-      h("div", { class: "card col-6" }, h("h2", {}, "Статусы заказов"), h("p", { class: "sub" }, `Все заказы, созданные за ${an.days} дн.`),
-        donut(Object.entries(an.statuses).sort((a, b) => b[1] - a[1]).map(([key, value]) => ({ label: STATUS[key] || key, value, color: STATUS_COLOR[key] || "#8a9ab5" })))),
-      h("div", { class: "card col-6" }, h("h2", {}, "Топ товаров"), h("p", { class: "sub" }, `По выручке за ${an.days} дн.`),
-        hbars(an.top_products.map(p => ({ name: p.name, value: p.revenue, text: `${money(p.revenue)} · ${p.sales} шт.` })))),
-      topCategories);
-  } else {
-    grid.append(attention, topCategories, h("div", { class: "card col-12" }, h("h2", {}, "Графики"),
-      h("div", { class: "empty" }, "Сервер пока не отдаёт /api/admin/analytics — обнови и перезапусти бота, чтобы увидеть графики.")));
+  if (!an) {
+    page.append(h("div", { class: "grid" }, recentOrders(), attention, topCategories,
+      h("div", { class: "card col-12" }, h("h2", {}, "Графики"), totals,
+        h("div", { class: "empty" }, "Сервер пока не отдаёт /api/admin/analytics — обнови и перезапусти бота, чтобы увидеть графики."))));
+    return page;
   }
-  page.append(grid);
+  const pts = key => an.series.map(p => ({ label: dayLabel(p.date), title: dayLabel(p.date), value: p[key] }));
+  const vals = key => an.series.map(p => num(p[key]));
+  const avg = an.current.orders ? an.current.revenue / an.current.orders : 0;
+  const avgPrev = an.previous.orders ? an.previous.revenue / an.previous.orders : 0;
+  const note = "к прошлому периоду";
+  page.append(h("div", { class: "kpis" },
+    kpi(`Выручка · ${an.days} дн.`, "money", money(an.current.revenue), delta(an.current.revenue, an.previous.revenue), vals("revenue"), note),
+    kpi("Оплаченные заказы", "bag", an.current.orders, delta(an.current.orders, an.previous.orders), vals("orders"), note),
+    kpi("Новые покупатели", "users", an.current.customers, delta(an.current.customers, an.previous.customers), vals("customers"), note),
+    kpi("Посетители", "eye", an.current.visits, delta(an.current.visits, an.previous.visits), vals("visits"), note)));
+
+  const sales = h("div", { class: "card col-8 flexcol" }, h("h2", {}, "Статистика продаж"), h("p", { class: "sub" }, `Выручка по дням за ${an.days} дн. · средний чек ${money(avg)} `, delta(avg, avgPrev)),
+    timeChart(pts("revenue"), { type: "line", tipFmt: money, height: 300 }), totals);
+  page.append(h("div", { class: "grid" },
+    sales, recentOrders(),
+    popularProducts(an),
+    h("div", { class: "card col-4" }, h("h2", {}, "Статусы заказов"), h("p", { class: "sub" }, `Все заказы, созданные за ${an.days} дн.`),
+      donut(Object.entries(an.statuses).sort((a, b) => b[1] - a[1]).map(([key, value]) => ({ label: STATUS[key] || key, value, color: STATUS_COLOR[key] || "#8f939d" })))),
+    attention,
+    h("div", { class: "card col-6" }, h("h2", {}, "Покупки по дням"), h("p", { class: "sub" }, "Количество оплаченных заказов"),
+      timeChart(pts("orders"), { type: "bar", integer: true, color: "#e6e8ec", tipFmt: v => `${v} ${plural(v, "покупка", "покупки", "покупок")}` })),
+    h("div", { class: "card col-6" }, h("h2", {}, "Посетители"), h("p", { class: "sub" }, "Уникальные посетители сайта по дням"),
+      timeChart(pts("visits"), { type: "line", integer: true, color: "#c3c6ce", tipFmt: v => `${v} ${plural(v, "посетитель", "посетителя", "посетителей")}` })),
+    h("div", { class: "card col-6" }, h("h2", {}, "Новые покупатели"), h("p", { class: "sub" }, "Кто впервые запустил бота"),
+      timeChart(pts("customers"), { type: "bar", integer: true, color: "#cfd2d8", tipFmt: v => `${v} ${plural(v, "покупатель", "покупателя", "покупателей")}` })),
+    topCategories));
   return page;
 }
 
