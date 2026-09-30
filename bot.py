@@ -37,8 +37,10 @@ from rich_description import description_to_html
 from exchange_rates import ExchangeRates
 from crypto_pay import CryptoPay, PaymentError, money, quantity, valid_signature
 from payments import Payments
+from quantity_emoji import QuantityEmoji
 
 exchange_rates = ExchangeRates()
+quantity_emoji = QuantityEmoji()
 
 emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.json")
 
@@ -444,42 +446,28 @@ async def render_product(callback: CallbackQuery, product: dict, count: int) -> 
         await _render_product(callback, product, count)
 
 
+def quantity_button(symbol: str, callback_data: str, emoji_id: str | None) -> InlineKeyboardButton:
+    # Bot API requires a non-empty label. Braille blank is a real non-whitespace
+    # character: the premium icon remains the only visible +/- glyph.
+    return InlineKeyboardButton(text="⠀" if emoji_id else symbol, callback_data=callback_data,
+                                icon_custom_emoji_id=emoji_id, style="primary")
+
+
 async def _render_product(callback: CallbackQuery, product: dict, count: int) -> None:
     user = callback.from_user
     await get_database().upsert_customer(user.id, user.username, user.first_name)
-    service = get_payments()
-    available = await service.store.available(product['id'], user.id)
+    available = await get_payments().store.available(product['id'], user.id)
     count = min(count, max(1, available), 100)
-    payment = None
-    error = ""
-    if available:
-        try:
-            payment = await service.checkout(user.id, 'product', product_id=product['id'], count=count)
-            if payment['status'] == 'paid':
-                await service.deliver(payment['id'])
-                await callback.message.answer("Этот счёт уже оплачен. Товар отправлен отдельным сообщением.")
-                return
-        except (ValueError, PaymentError) as exc:
-            error = f"\n\n{html.escape(str(exc))}"
-    total = payment['amount'] if payment else Decimal(str(product['price'])) * count
-    # Invoice snapshots remain valid if the admin changes a price while it is open.
-    displayed = dict(product)
-    if payment:
-        displayed['price'] = payment['amount'] / count
-        displayed['name'] = payment['product_name']
-    text = product_card(displayed, available)
+    text = product_card(product, available)
     rows = []
     if available:
-        text += f"\n\nКоличество: <b>{count} шт.</b>\n{await payment_summary(str(total))}" + error
+        icons = await quantity_emoji.load(telegram_bot)
         rows.append([
-            button("−", f"qty:{product['id']}:{max(1, count - 1)}", style="success"),
-            button(f"{count} шт.", "quantity_info", style="success"),
-            button("+", f"qty:{product['id']}:{min(available, 100, count + 1)}", style="success"),
+            quantity_button("−", f"qty:{product['id']}:{max(1, count - 1)}", icons.get('minus')),
+            button(f"{count} шт.", "quantity_info", style="primary"),
+            quantity_button("+", f"qty:{product['id']}:{min(available, 100, count + 1)}", icons.get('plus')),
         ])
-        admin_url = await admin_payment_url(total, f"Хочу купить {displayed['name']} × {count} шт.")
-        rows += payment_keyboard(payment, admin_url=admin_url, retry=f"qty:{product['id']}:{count}", balance=True).inline_keyboard
-        if payment:
-            text += "\n\n<i>Счёт действителен 10 минут. Для другого способа оплаты используйте только одну кнопку.</i>"
+        rows.append([premium_button("Способы оплаты", f"pay_methods:{product['id']}:{count}", EMOJI['card'], style="primary")])
     rows.append([premium_button("Назад к категории" if product['category_id'] else "Назад в каталог",
         f"category:{product['category_id']}" if product['category_id'] else "catalog", EMOJI['back'], style="danger")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -491,6 +479,60 @@ async def _render_product(callback: CallbackQuery, product: dict, count: int) ->
                 raise
     else:
         await callback.message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("pay_methods:"))
+async def open_payment_methods(callback: CallbackQuery):
+    if not private_checkout(callback):
+        await callback.answer("Откройте магазин в личном чате с ботом.", show_alert=True)
+        return
+    try:
+        _, product_id, count = callback.data.split(":")
+        product_id = int(product_id)
+        count = quantity(count)
+    except (ValueError, TypeError):
+        await callback.answer("Некорректное количество.", show_alert=True)
+        return
+    product = await get_database().product(product_id)
+    if not product or not product['is_active']:
+        await callback.answer("Товар недоступен", show_alert=True)
+        return
+    await callback.answer()
+    async with get_payments().lock(callback.from_user.id, 'card', product_id):
+        await show_product_payment_methods(callback, product, count)
+
+
+async def show_product_payment_methods(callback: CallbackQuery, product: dict, count: int):
+    user = callback.from_user
+    await get_database().upsert_customer(user.id, user.username, user.first_name)
+    service = get_payments()
+    payment = None
+    error = ""
+    back = premium_button("Назад к товару", f"product:{product['id']}:{count}", EMOJI['back'], style="primary")
+    try:
+        payment = await service.checkout(user.id, 'product', product_id=product['id'], count=count)
+        if payment['status'] == 'paid':
+            await service.deliver(payment['id'])
+            await callback.message.answer("Этот счёт уже оплачен. Товар придёт отдельным сообщением.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back]]))
+            return
+    except PaymentError as exc:
+        error = "\n\n" + html.escape(str(exc))
+    except ValueError as exc:
+        # Don't offer payment for nonexistent stock or an invalid quantity.
+        await callback.message.answer(html.escape(str(exc)), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back]]))
+        return
+    total = payment['amount'] if payment else Decimal(str(product['price'])) * count
+    name = payment['product_name'] if payment else product['name']
+    text = f"<b>Способы оплаты</b>\n\n<b>{html.escape(name)}</b> × {count} шт.\n{await payment_summary(str(total))}"
+    if payment:
+        text += "\n\n<i>Счёт действителен 10 минут. Выберите только один способ оплаты.</i>"
+    text += error
+    admin_url = await admin_payment_url(total, f"Хочу купить {name} × {count} шт.")
+    keyboard = payment_keyboard(payment, admin_url=admin_url,
+        retry=f"pay_methods:{product['id']}:{count}", balance=True)
+    keyboard.inline_keyboard.append([back])
+    await callback.message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "quantity_info")
@@ -642,6 +684,7 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     health_runner = await start_health_server()
+    await quantity_emoji.load(bot)
     worker = asyncio.create_task(payments.run(), name="payment-reconciliation")
     try:
         await dispatcher.start_polling(bot)

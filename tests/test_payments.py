@@ -386,19 +386,27 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
-    async def test_product_card_has_quantity_total_and_direct_green_links(self):
+    async def test_product_card_has_blue_quantity_and_methods_without_invoice(self):
         user=SimpleNamespace(id=10,username='test',first_name='Test')
         cb=SimpleNamespace(data='product:'+str(self.pid),from_user=user,message=SimpleNamespace(answer=AsyncMock(),edit_text=AsyncMock()))
         with patch.object(bot,'database',self.db),patch.object(bot,'payments',self.service),patch.object(bot.exchange_rates,'quote',AsyncMock(return_value=None)):
             await bot.render_product(cb,self.product,2)
         text=cb.message.answer.call_args.args[0]
-        markup=cb.message.answer.call_args.kwargs['reply_markup']
-        buttons=[b for row in markup.inline_keyboard for b in row]
-        self.assertIn('2 шт.',text); self.assertIn('5.00',text)
-        crypto=next(b for b in buttons if b.url and 'CryptoBot' in b.url)
-        admin=next(b for b in buttons if b.url and 'Ditzzmback' in b.url)
-        self.assertEqual(crypto.style,'success'); self.assertEqual(admin.style,'success')
-        self.assertTrue(any(b.callback_data==f'qty:{self.pid}:3' for b in buttons))
+        buttons=[b for row in cb.message.answer.call_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        self.assertIn('2.50',text)
+        self.assertNotIn('К оплате',text)
+        self.assertEqual([b.style for b in buttons[:4]],['primary']*4)
+        self.assertEqual(buttons[3].callback_data,f'pay_methods:{self.pid}:2')
+        self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM payments'),0)
+        self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM stock_items WHERE reserved_until>NOW()'),0)
+        with patch.object(bot,'database',self.db),patch.object(bot,'payments',self.service),patch.object(bot.exchange_rates,'quote',AsyncMock(return_value=None)):
+            await bot.show_product_payment_methods(cb,self.product,2)
+        text=cb.message.answer.call_args.args[0]
+        buttons=[b for row in cb.message.answer.call_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        self.assertIn('5.00',text)
+        self.assertTrue(any(b.url and 'CryptoBot' in b.url for b in buttons))
+        self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM payments'),1)
+        self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM stock_items WHERE reserved_until>NOW()'),2)
 
 
 if __name__ == '__main__':
