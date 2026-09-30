@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from emoji_library import validate_emoji_id
-from secretary_store import SECRETARY_SCHEMA
 
 from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
@@ -98,9 +97,6 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS provider_invoice_id BIGINT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_item_id BIGINT REFERENCES stock_items(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS orders_provider_invoice_id_idx ON orders(provider_invoice_id) WHERE provider_invoice_id IS NOT NULL;
 """
-
-
-SCHEMA += SECRETARY_SCHEMA
 
 
 class Database:
