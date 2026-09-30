@@ -28,6 +28,7 @@ from aiogram.types import (
     Message,
     InlineQuery,
     InlineQueryResultsButton,
+    LinkPreviewOptions,
 )
 
 from config import COVERS_DIR, settings
@@ -37,7 +38,8 @@ from shop_emoji import DEFAULT_EMOJI, EMOJI_FALLBACKS, EMOJI_LABELS
 from emoji_library import EmojiLibrary, validate_emoji_id
 from rich_description import description_to_html
 from exchange_rates import ExchangeRates
-from inline_emoji import InlineCatalog, InlineThumbnails, public_base, result_for, valid_thumbnail
+from inline_emoji import InlineCatalog, InlineThumbnails, PLACEHOLDER, compose, valid_thumbnail
+from direct_emoji import DraftStore, DIRECT_PAGE_SIZE, plain_composed, has_exact_emoji
 
 exchange_rates = ExchangeRates()
 
@@ -45,6 +47,7 @@ emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.j
 
 inline_catalog = InlineCatalog(emoji_library.items)
 inline_thumbnails = InlineThumbnails()
+direct_drafts = DraftStore()
 
 router = Router()
 database: Database | None = None
@@ -327,80 +330,182 @@ async def show_category(message: Message, category_id: int) -> None:
         await message.answer(caption, reply_markup=keyboard)
 
 
-@router.message(Command("inline"))
-async def inline_help(message: Message, error: bool = False) -> None:
-    me = await message.bot.me()
-    name = "@" + me.username
-    notice = ("Telegram отклонил inline-ответ. Проверьте HTTPS-адрес миниатюр и права бота. Поддержка премиум-эмодзи в прямых сообщениях "
-              "бота не гарантирует поддержку inline. По правилам Bot API для этого режима "
-              "нужен подходящий дополнительный username на Fragment.\n\n") if error else ""
+@router.message(Command("emoji"))
+async def command_direct_emoji(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not message.from_user:
+        await direct_emoji_help(message)
+        return
     try:
-        public_base(settings.public_base_url)
-        setup = ""
-    except ValueError:
-        setup = "\n\nВладелец должен настроить PUBLIC_BASE_URL — HTTPS-адрес приложения без /admin."
+        draft = direct_drafts.create(message.from_user.id, parts[1], message.chat.id)
+        await show_direct_choices(message, draft)
+    except ValueError as exc:
+        await message.answer(html.escape(str(exc)))
+
+
+async def direct_emoji_help(message: Message) -> None:
     await message.answer(
-        notice + "<b>Текст с премиум-эмодзи прямо в чате</b>\n\n"
-        f"Напиши в нужном чате: <code>{name} Привет! | звезда</code>\n"
-        "Или ищи по символу / набору: <code>Привет! | ⭐ TgAndroidIcons</code>.\n"
-        "Выбери вариант с нужной миниатюрой — нажатие сразу отправляет всё сообщение.\n\n"
-        "По умолчанию эмодзи добавляется в конец. Чтобы поставить его внутри текста: "
-        f"<code>{name} Привет {{эмодзи}} друг! | звезда</code>.\n"
-        "Один выбранный вариант эмодзи на сообщение; все {эмодзи} заменяются им.\n"
-        "Наборы и их порядок сохранены. Миниатюры статичные, в тексте отправляется исходный ID.\n\n"
-        "В BotFather нужно включить /setinline. Отправка будет с пометкой via бота. "
-        "Доступность премиум-эмодзи в inline определяется Telegram." + setup,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Попробовать в чате", switch_inline_query="Привет! | ⭐")
-        ]]),
+        "<b>Сообщение с премиум-эмодзи от бота</b>\n\n"
+        "Отправь: <code>/emoji Привет! | звезда</code>\n"
+        "Или: <code>/emoji Привет! | ⭐ TgAndroidIcons</code>\n"
+        "Чтобы вставить значок внутри текста: "
+        "<code>/emoji Привет {эмодзи} друг! | звезда</code>.\n\n"
+        "Выбери нужный номер / эмодзи на кнопке. Бот заменит своё сообщение выбора "
+        "на готовый текст — без via и без мини-приложения.\n"
+        "Один выбранный вид эмодзи; все {эмодзи} заменяются им.\n\n"
+        "В личном чате результат можно переслать. В группе бот должен быть добавлен "
+        "и иметь право писать; используй /emoji@имя_бота. "
+        "Выбор действует 15 минут и доступен только автору запроса."
     )
 
 
-async def inline_notice(query: InlineQuery, label: str, parameter: str = "inline_help") -> None:
+@router.message(Command("inline"))
+async def inline_help(message: Message, error: bool = False) -> None:
+    await direct_emoji_help(message)
+
+
+async def inline_notice(query: InlineQuery, label: str, parameter: str = "emoji_help") -> None:
     try:
         await query.answer([], cache_time=0, is_personal=True,
                            button=InlineQueryResultsButton(text=label, start_parameter=parameter))
     except TelegramAPIError:
-        # The user can keep typing; old queries may expire before a reply arrives.
-        logging.debug("Inline notice could not be delivered")
+        logging.debug("Old inline query could not be answered")
 
 
 @router.inline_query()
 async def inline_compose(query: InlineQuery) -> None:
+    # Inline cannot send a bot-owned message into an unknown target chat.
+    # Preserve the user's draft and hand it to the bot's private chat instead.
+    if not query.query.strip():
+        await inline_notice(query, "Написать сообщение от бота")
+        return
     try:
-        base = public_base(settings.public_base_url)
-        if not settings.admin_secret or settings.admin_secret.startswith("change-this"):
-            raise ValueError("Не настроен ключ приложения")
-        text, rows, next_offset = inline_catalog.page(query.query, query.offset)
+        _, rows, _ = inline_catalog.page(query.query, page_size=DIRECT_PAGE_SIZE)
+        if not rows:
+            await inline_notice(query, "Ничего не найдено · помощь")
+            return
+        draft = direct_drafts.create(query.from_user.id, query.query)
     except ValueError:
-        await inline_notice(query, "Настройка inline / помощь")
+        await inline_notice(query, "Сократите текст · помощь")
         return
+    await inline_notice(query, "Отправить от имени бота", "e_" + draft.token)
+
+
+async def show_direct_choices(message: Message, draft, offset=0, edit=False) -> None:
+    text, rows, next_offset = inline_catalog.page(draft.query, str(offset), page_size=DIRECT_PAGE_SIZE)
     if not rows:
-        await inline_notice(query, "Ничего не найдено · помощь")
+        await message.answer("Эмодзи не найдены. Попробуйте другой символ или название набора.")
         return
     try:
-        metadata = await asyncio.wait_for(emoji_library.previews(query.bot, [row["id"] for row in rows]), timeout=4)
-        results = []
-        for row in rows:
-            sticker = emoji_library.metadata.get(row["id"])
-            emoji = metadata[row["id"]].get("emoji")
-            if not metadata[row["id"]]["available"] or not emoji or len(emoji) > 32:
-                continue
-            if (getattr(sticker, "is_animated", False) or getattr(sticker, "is_video", False)) and not getattr(sticker, "thumbnail", None):
-                continue
-            results.append(result_for(query.query, text, {**row, "emoji": emoji}, inline_catalog, base, settings.admin_secret))
-        if not results:
-            await inline_notice(query, "Миниатюры недоступны · помощь")
+        metadata = await asyncio.wait_for(emoji_library.previews(message.bot, [row["id"] for row in rows]), timeout=4)
+    except (TelegramAPIError, asyncio.TimeoutError):
+        await message.answer("Не удалось получить эмодзи. Повторите /emoji чуть позже.")
+        return
+    available = [{**row, "emoji": metadata[row["id"]]["emoji"]} for row in rows
+                 if metadata[row["id"]]["available"] and metadata[row["id"]]["emoji"] and len(metadata[row["id"]]["emoji"]) <= 32]
+    if not available:
+        await message.answer("Эмодзи этой страницы недоступны. Попробуйте другой поиск.")
+        return
+    lines = ["<b>Выберите эмодзи — сообщение отправит бот</b>",
+             "Текст: " + html.escape(text[:160] or "Только эмодзи"), ""]
+    buttons = []
+    for index, item in enumerate(available, 1):
+        lines.append(f'{index}. <tg-emoji emoji-id="{item["id"]}">{html.escape(item["emoji"])}</tg-emoji> '
+                     f'{html.escape(item["pack"])} · №{inline_catalog.positions[item["id"]]}')
+        buttons.append(InlineKeyboardButton(text=str(index), icon_custom_emoji_id=item["id"],
+                       callback_data=f'emod:{draft.token}:pick:{item["id"]}'))
+    keyboard = [buttons[index:index+4] for index in range(0, len(buttons), 4)]
+    nav = []
+    if offset:
+        nav.append(InlineKeyboardButton(text="← Назад", callback_data=f'emod:{draft.token}:page:{max(0,offset-DIRECT_PAGE_SIZE)}'))
+    if next_offset:
+        nav.append(InlineKeyboardButton(text="Далее →", callback_data=f'emod:{draft.token}:page:{next_offset}'))
+    if nav:
+        keyboard.append(nav)
+    keyboard.append([InlineKeyboardButton(text="Отмена", callback_data=f'emod:{draft.token}:cancel:0')])
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    try:
+        if edit:
+            picker = await message.edit_text("\n".join(lines), reply_markup=markup, parse_mode="HTML")
+        else:
+            picker = await message.answer("\n".join(lines), reply_markup=markup, parse_mode="HTML")
+    except TelegramAPIError:
+        await message.answer("Telegram не разрешил показать премиум-эмодзи. Проверьте Premium у владельца бота.")
+        return
+    expected_ids = {item["id"] for item in available}
+    actual_ids = {getattr(entity, "custom_emoji_id", None) for entity in (getattr(picker, "entities", None) or [])}
+    if not expected_ids.issubset(actual_ids):
+        draft.sent = True
+        draft.query = ""
+        draft.allowed.clear()
+        await picker.edit_text("Telegram не сохранил премиум-эмодзи даже в прямом сообщении бота. "
+                               "Проверьте Premium у владельца бота в BotFather.", reply_markup=None)
+        return
+    draft.chat_id = picker.chat.id
+    draft.picker_id = picker.message_id
+    draft.offset = offset
+    draft.allowed = {item["id"]: item["emoji"] for item in available}
+
+
+@router.callback_query(F.data.startswith("emod:"))
+async def direct_emoji_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("Некорректный выбор.", show_alert=True)
+        return
+    _, token, action, value = parts
+    draft = direct_drafts.get(token, callback.from_user.id)
+    message = callback.message
+    if not draft or not message or not hasattr(message, "edit_text"):
+        await callback.answer("Выбор устарел или принадлежит другому человеку. Начните с /emoji.", show_alert=True)
+        return
+    if message.chat.id != draft.chat_id or message.message_id != draft.picker_id:
+        await callback.answer("Этот выбор относится к другому сообщению.", show_alert=True)
+        return
+    async with draft.lock:
+        if direct_drafts.get(token, callback.from_user.id) is not draft:
+            await callback.answer("Выбор устарел. Начните с /emoji.", show_alert=True)
             return
-        await query.answer(results, cache_time=10, is_personal=True, next_offset=next_offset,
-                           button=InlineQueryResultsButton(text="Как пользоваться", start_parameter="inline_help"))
-    except TelegramBadRequest as exc:
-        if "query" in exc.message.lower() and "invalid" in exc.message.lower():
+        if draft.sent:
+            await callback.answer("Сообщение уже отправлено.")
             return
-        logging.warning("Telegram rejected inline emoji results: %s", exc.message)
-        await inline_notice(query, "Telegram отклонил отправку · помощь", "inline_error")
-    except (TelegramAPIError, asyncio.TimeoutError, ValueError):
-        await inline_notice(query, "Эмодзи временно недоступны · помощь")
+        if action == "cancel":
+            await callback.answer()
+            await message.edit_text("Выбор отменён.", reply_markup=None)
+            draft.sent = True
+            draft.query = ""
+            draft.allowed.clear()
+            return
+        if action == "page" and value.isascii() and value.isdecimal() and len(value) <= 4:
+            offset = int(value)
+            if offset not in {max(0, draft.offset-DIRECT_PAGE_SIZE), draft.offset+DIRECT_PAGE_SIZE}:
+                await callback.answer("Страница устарела.", show_alert=True)
+                return
+            await callback.answer()
+            await show_direct_choices(message, draft, offset=offset, edit=True)
+            return
+        if action != "pick" or value not in draft.allowed:
+            await callback.answer("Выберите эмодзи с текущей страницы.", show_alert=True)
+            return
+        text, _, _ = inline_catalog.page(draft.query, page_size=DIRECT_PAGE_SIZE)
+        fallback = draft.allowed[value]
+        if len(plain_composed(text, fallback).encode("utf-16-le")) // 2 > 4096:
+            await callback.answer("Сообщение слишком длинное. Сократите текст.", show_alert=True)
+            return
+        await callback.answer()
+        try:
+            result = await message.edit_text(compose(text, value, fallback), parse_mode="HTML", reply_markup=None,
+                                             link_preview_options=LinkPreviewOptions(is_disabled=True))
+        except TelegramAPIError:
+            await message.answer("Не удалось отправить премиум-эмодзи. Проверьте права бота и повторите /emoji.")
+            return
+        expected = max(1, text.count(PLACEHOLDER))
+        draft.sent = True
+        draft.query = ""
+        draft.allowed.clear()
+        if not has_exact_emoji(result, value, expected):
+            await result.edit_text("Telegram заменил выбранный премиум-эмодзи обычным символом. "
+                                   "Проверьте Premium у владельца бота в BotFather.", reply_markup=None)
 
 
 async def inline_emoji_thumbnail(request: web.Request) -> web.Response:
@@ -421,8 +526,19 @@ async def inline_emoji_thumbnail(request: web.Request) -> web.Response:
 @router.message(Command("start", "menu"))
 async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
-    if message.text and message.text.split(maxsplit=1)[-1] in {"inline_help", "inline_error"} and len(message.text.split(maxsplit=1)) == 2:
-        await inline_help(message, error=message.text.endswith("inline_error"))
+    parts = (message.text or "").split(maxsplit=1)
+    parameter = parts[1] if len(parts) == 2 and parts[0].split("@")[0] == "/start" else ""
+    if parameter in {"inline_help", "inline_error", "emoji_help"}:
+        await direct_emoji_help(message)
+        return
+    if parameter.startswith("e_"):
+        draft = direct_drafts.get(parameter[2:], message.from_user.id)
+        if not draft or draft.sent or draft.chat_id is not None or message.chat.type != "private":
+            await message.answer("Выбор устарел. Отправьте /emoji текст | эмодзи.")
+            return
+        async with draft.lock:
+            if direct_drafts.get(parameter[2:], message.from_user.id) is draft and not draft.sent and draft.picker_id is None:
+                await show_direct_choices(message, draft)
         return
     await get_database().upsert_customer(
         message.from_user.id,
