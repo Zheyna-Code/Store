@@ -40,6 +40,8 @@ from rich_description import description_to_html
 from exchange_rates import ExchangeRates
 from inline_emoji import InlineCatalog, InlineThumbnails, PLACEHOLDER, compose, valid_thumbnail
 from direct_emoji import DraftStore, DIRECT_PAGE_SIZE, plain_composed, has_exact_emoji
+from secretary import Secretary
+from secretary_store import SecretaryStore
 
 exchange_rates = ExchangeRates()
 
@@ -343,6 +345,12 @@ async def command_direct_emoji(message: Message) -> None:
         await message.answer(html.escape(str(exc)))
 
 
+secretary = Secretary(
+    lambda: SecretaryStore(get_database()._pool()), direct_drafts,
+    lambda *args, **kwargs: show_direct_choices(*args, **kwargs),
+)
+
+
 async def direct_emoji_help(message: Message) -> None:
     await message.answer(
         "<b>Сообщение с премиум-эмодзи от бота</b>\n\n"
@@ -355,7 +363,9 @@ async def direct_emoji_help(message: Message) -> None:
         "Один выбранный вид эмодзи; все {эмодзи} заменяются им.\n\n"
         "В личном чате результат можно переслать. В группе бот должен быть добавлен "
         "и иметь право писать; используй /emoji@имя_бота. "
-        "Выбор действует 15 минут и доступен только автору запроса."
+        "Выбор действует 15 минут и доступен только автору запроса.\n\n"
+        "Для отправки от твоего аккаунта через режим секретаря — /say. "
+        "Либо открой «Управлять ботом» в подключённом диалоге."
     )
 
 
@@ -406,7 +416,9 @@ async def show_direct_choices(message: Message, draft, offset=0, edit=False) -> 
     if not available:
         await message.answer("Эмодзи этой страницы недоступны. Попробуйте другой поиск.")
         return
-    lines = ["<b>Выберите эмодзи — сообщение отправит бот</b>",
+    heading = ("<b>Выбери эмодзи — отправлю от твоего имени</b>\nДиалог: " + html.escape(draft.target_title)
+               if draft.secretary else "<b>Выберите эмодзи — сообщение отправит бот</b>")
+    lines = [heading,
              "Текст: " + html.escape(text[:160] or "Только эмодзи"), ""]
     buttons = []
     for index, item in enumerate(available, 1):
@@ -475,6 +487,7 @@ async def direct_emoji_callback(callback: CallbackQuery) -> None:
             draft.sent = True
             draft.query = ""
             draft.allowed.clear()
+            draft.destinations.clear()
             return
         if action == "page" and value.isascii() and value.isdecimal() and len(value) <= 4:
             offset = int(value)
@@ -493,6 +506,9 @@ async def direct_emoji_callback(callback: CallbackQuery) -> None:
             await callback.answer("Сообщение слишком длинное. Сократите текст.", show_alert=True)
             return
         await callback.answer()
+        if draft.secretary:
+            await secretary.send_selected(message, draft, text, value, fallback)
+            return
         try:
             result = await message.edit_text(compose(text, value, fallback), parse_mode="HTML", reply_markup=None,
                                              link_preview_options=LinkPreviewOptions(is_disabled=True))
@@ -528,6 +544,13 @@ async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     parts = (message.text or "").split(maxsplit=1)
     parameter = parts[1] if len(parts) == 2 and parts[0].split("@")[0] == "/start" else ""
+    if parameter.startswith("bizChat"):
+        chat = parameter[7:]
+        if chat.isascii() and chat.isdecimal() and len(chat) <= 20:
+            await secretary.open_chat(message, state, int(chat))
+        else:
+            await message.answer("Некорректный диалог. Начни с /say.")
+        return
     if parameter in {"inline_help", "inline_error", "emoji_help"}:
         await direct_emoji_help(message)
         return
@@ -755,6 +778,7 @@ async def main() -> None:
     bot = Bot(token=settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     telegram_bot = bot
     dispatcher = Dispatcher()
+    dispatcher.include_router(secretary.router)
     dispatcher.include_router(router)
     health_runner = await start_health_server()
     try:
