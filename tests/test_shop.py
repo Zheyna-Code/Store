@@ -68,9 +68,10 @@ class EmojiTests(unittest.IsolatedAsyncioTestCase):
         db = SimpleNamespace(active_categories=AsyncMock(return_value=[dict(id=1,name='ChatGPT')]),
             category_products=AsyncMock(return_value=[dict(id=5,name='Test',price='1.00',stock_count=3),
                 dict(id=6,name='Empty',price='2.00',stock_count=0)]))
-        message = SimpleNamespace(delete=AsyncMock(),answer=AsyncMock())
+        message = SimpleNamespace(delete=AsyncMock(),answer=AsyncMock(),answer_photo=AsyncMock())
         with patch.object(bot,'database',db): await bot.show_category(message,1)
-        keyboard = message.answer.call_args.kwargs['reply_markup']
+        call = message.answer_photo.call_args or message.answer.call_args
+        keyboard = call.kwargs['reply_markup']
         self.assertEqual(keyboard.inline_keyboard[0][0].icon_custom_emoji_id, DEFAULT_EMOJI['chatgpt'])
         self.assertEqual(keyboard.inline_keyboard[0][0].text, 'Test · $1.00')
         self.assertEqual(keyboard.inline_keyboard[0][0].style, 'success')

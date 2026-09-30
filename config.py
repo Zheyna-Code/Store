@@ -31,6 +31,7 @@ class Settings:
     crypto_pay_token: str
     crypto_pay_webhook_secret: str
     crypto_pay_testnet: bool = False
+    shop_url: str = "https://nexora.hostless.app/"
 
 
 settings = Settings(
@@ -43,6 +44,7 @@ settings = Settings(
     crypto_pay_token=os.getenv("CRYPTO_PAY_TOKEN", ""),
     crypto_pay_webhook_secret=os.getenv("CRYPTO_PAY_WEBHOOK_SECRET", ""),
     crypto_pay_testnet=os.getenv("CRYPTO_PAY_TESTNET", "false").lower() in {"true", "1", "yes"},
+    shop_url=os.getenv("SHOP_URL", "https://nexora.hostless.app/"),
 )
 
 COVERS_DIR = BASE_DIR / "brand-covers"

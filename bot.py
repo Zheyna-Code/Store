@@ -6,6 +6,7 @@ import logging
 import os
 import secrets
 import json
+import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode
@@ -26,6 +27,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     CopyTextButton,
+    WebAppInfo,
+    MenuButtonWebApp,
     Message,
 )
 
@@ -40,6 +43,7 @@ from crypto_pay import CryptoPay, PaymentError, money, quantity, valid_signature
 from payments import Payments
 from quantity_emoji import QuantityEmoji
 from referrals import referral_link, start_referrer
+from storefront import ShopSite
 
 exchange_rates = ExchangeRates()
 quantity_emoji = QuantityEmoji()
@@ -50,6 +54,7 @@ router = Router()
 database: Database | None = None
 telegram_bot: Bot | None = None
 payments: Payments | None = None
+shop_site: ShopSite | None = None
 admin_sessions: set[str] = set()
 
 
@@ -141,6 +146,7 @@ def menu_keyboard() -> InlineKeyboardMarkup:
         [premium_button("Бонус", "bonus", EMOJI["bonus"]), premium_button("Профиль", "profile", EMOJI["profile"])],
         [premium_button("Техподдержка", "support", EMOJI["support"])],
         [premium_button("Прочее", "other", EMOJI["other"])],
+        [InlineKeyboardButton(text="Открыть Web App", web_app=WebAppInfo(url=settings.shop_url), icon_custom_emoji_id=EMOJI["catalog"], style="success")],
     ])
 
 
@@ -350,6 +356,24 @@ async def show_category(message: Message, category_id: int) -> None:
 async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = message.from_user
+    login_match = re.fullmatch(r'/start(?:@wanderersshop_bot)?\s+auth_([A-Za-z0-9_-]{32})', message.text or '', re.I)
+    if login_match:
+        if message.chat.type != "private" or shop_site is None:
+            await message.answer("Подтверждайте вход в личном чате с ботом.")
+            return
+        await get_database().upsert_customer(user.id, user.username, user.first_name)
+        login = await shop_site.auth.claim(login_match[1], user.id)
+        if not login:
+            await message.answer("Ссылка входа истекла или уже используется. Создайте новый запрос на сайте.")
+            return
+        await message.answer(f"<b>Подтверждение входа на сайт</b>\n\n{html.escape(shop_site.site_url)}\n"
+            f"Код: <code>{login['code']}</code>\n\nСравните этот код с кодом в браузере. "
+            "Если вы не запрашивали вход или коды не совпадают — не подтверждайте его.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [button("Подтвердить вход", f"weblogin:allow:{login['id']}", style="success")],
+                [button("Отказать", f"weblogin:deny:{login['id']}", style="danger")],
+            ]))
+        return
     referrer = start_referrer(message.text) if message.chat.type == "private" else None
     await get_database().upsert_customer(user.id, user.username, user.first_name, referrer)
     # Считаем уникальные визиты в магазин по Telegram ID, без учёта health-check.
@@ -373,6 +397,23 @@ async def command_menu(message: Message, state: FSMContext) -> None:
         ),
         reply_markup=keyboard,
     )
+
+
+@router.callback_query(F.data.startswith("weblogin:"))
+async def approve_web_login(callback: CallbackQuery):
+    if not private_checkout(callback) or shop_site is None:
+        await callback.answer("Подтвердите вход в личном чате с ботом.", show_alert=True)
+        return
+    parts=callback.data.split(":")
+    if len(parts)!=3 or parts[1] not in {"allow","deny"} or not re.fullmatch(r'[A-Za-z0-9_-]{32}',parts[2]):
+        await callback.answer("Неверный запрос входа.", show_alert=True)
+        return
+    login=await shop_site.auth.approve(parts[2],callback.from_user.id,parts[1]=="allow")
+    if not login:
+        await callback.answer("Запрос уже обработан или истёк.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.edit_text("Вход подтверждён. Вернитесь в браузер — сайт откроет ваш профиль." if parts[1]=="allow" else "Вход отклонён.")
 
 
 @router.callback_query(F.data == "profile")
@@ -719,6 +760,10 @@ async def main() -> None:
     dispatcher.include_router(router)
     health_runner = await start_health_server()
     await quantity_emoji.load(bot)
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Магазин", web_app=WebAppInfo(url=settings.shop_url)),request_timeout=5)
+    except Exception:
+        logging.warning("Telegram menu button was not configured; Web App link remains in shop menu")
     worker = asyncio.create_task(payments.run(), name="payment-reconciliation")
     try:
         await dispatcher.start_polling(bot)
@@ -957,7 +1002,10 @@ async def crypto_webhook(request: web.Request) -> web.Response:
 async def start_health_server() -> web.AppRunner:
     """Поднимает HTTP-сервер магазина и закрытой админ-панели."""
     app = web.Application()
-    app.router.add_get("/", health)
+    global shop_site
+    shop_site=ShopSite(get_database,get_payments,settings.token,settings.shop_url,exchange_rates,COVERS_DIR,
+        {"warranty":settings.warranty_url,"terms":settings.terms_url,"privacy":settings.privacy_url})
+    shop_site.setup(app)
     app.router.add_get("/health", health)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin.js", admin_script)

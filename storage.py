@@ -6,6 +6,7 @@ import json
 from emoji_library import validate_emoji_id
 from payment_store import PAYMENT_SCHEMA
 from referrals import REFERRAL_SCHEMA, MAX_USER_ID
+from web_auth import WEB_SCHEMA
 
 from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
@@ -100,7 +101,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_item_id BIGINT REFERENCES stoc
 CREATE UNIQUE INDEX IF NOT EXISTS orders_provider_invoice_id_idx ON orders(provider_invoice_id) WHERE provider_invoice_id IS NOT NULL;
 """
 
-SCHEMA += PAYMENT_SCHEMA + REFERRAL_SCHEMA
+SCHEMA += PAYMENT_SCHEMA + REFERRAL_SCHEMA + WEB_SCHEMA
 
 
 class Database:
