@@ -395,7 +395,7 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         buttons=[b for row in cb.message.answer.call_args.kwargs['reply_markup'].inline_keyboard for b in row]
         self.assertIn('2.50',text)
         self.assertNotIn('К оплате',text)
-        self.assertEqual([b.style for b in buttons[:4]],['primary']*4)
+        self.assertEqual([b.style for b in buttons[:4]],['primary','primary','primary','success'])
         self.assertEqual(buttons[3].callback_data,f'pay_methods:{self.pid}:2')
         self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM payments'),0)
         self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM stock_items WHERE reserved_until>NOW()'),0)

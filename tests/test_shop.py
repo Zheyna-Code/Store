@@ -66,12 +66,16 @@ class EmojiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.EMOJI['catalog'], DEFAULT_EMOJI['catalog'])
     async def test_product_buttons_use_category_and_usd(self):
         db = SimpleNamespace(active_categories=AsyncMock(return_value=[dict(id=1,name='ChatGPT')]),
-            category_products=AsyncMock(return_value=[dict(id=5,name='Test',price='1.00',stock_count=3)]))
+            category_products=AsyncMock(return_value=[dict(id=5,name='Test',price='1.00',stock_count=3),
+                dict(id=6,name='Empty',price='2.00',stock_count=0)]))
         message = SimpleNamespace(delete=AsyncMock(),answer=AsyncMock())
         with patch.object(bot,'database',db): await bot.show_category(message,1)
         keyboard = message.answer.call_args.kwargs['reply_markup']
         self.assertEqual(keyboard.inline_keyboard[0][0].icon_custom_emoji_id, DEFAULT_EMOJI['chatgpt'])
         self.assertEqual(keyboard.inline_keyboard[0][0].text, 'Test · $1.00')
+        self.assertEqual(keyboard.inline_keyboard[0][0].style, 'success')
+        self.assertEqual(keyboard.inline_keyboard[1][0].style, 'danger')
+        self.assertIn('нет в наличии', keyboard.inline_keyboard[1][0].text)
     async def test_crypto_invoice_is_usd(self):
         from crypto_pay import CryptoPay
         client = CryptoPay('test')
