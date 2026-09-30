@@ -48,7 +48,7 @@ class InitDataTests(unittest.TestCase):
             with self.assertRaises(ValueError):validate_init_data(signed(u),TOKEN)
     def test_shop_origin_validation(self):
         for url in ['http://example.com','https://u@host','https://host/sub/','https://host/?bad=1','https://host/#x']:
-            with self.assertRaises(ValueError):ShopSite(None,None,TOKEN,url,None,'.')
+            with self.assertRaises(ValueError):ShopSite(None,None,TOKEN,url,None)
 
 
 @unittest.skipUnless(os.getenv('TEST_DATABASE_URL'),'requires disposable TEST_DATABASE_URL')
@@ -56,7 +56,7 @@ class StoreApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await fixture.LedgerTests.asyncSetUp(self)
         self.rates=SimpleNamespace(quote=AsyncMock(return_value=None))
-        self.site=ShopSite(lambda:self.db,lambda:self.service,TOKEN,ORIGIN+'/',self.rates,Path('brand-covers'))
+        self.site=ShopSite(lambda:self.db,lambda:self.service,TOKEN,ORIGIN+'/',self.rates)
         app=web.Application();self.site.setup(app)
         self.client=TestClient(TestServer(app));await self.client.start_server()
         self.token,self.csrf=await self.site.auth.create_session(10)
@@ -68,15 +68,16 @@ class StoreApiTests(unittest.IsolatedAsyncioTestCase):
         return r,await r.json()
     async def test_index_and_assets_security(self):
         r=await self.client.get('/');self.assertEqual(r.status,200)
-        self.assertIn('Nexus Store',await r.text());self.assertIn('frame-ancestors',r.headers['Content-Security-Policy'])
+        html=await r.text();self.assertIn('Nexus Store',html);self.assertNotIn('/store-media/',html);self.assertNotIn('brand-covers',html);self.assertIn('frame-ancestors',r.headers['Content-Security-Policy'])
         for path in ['/storefront/shop.js','/storefront/shop.css','/storefront/icon.svg']:
             r=await self.client.get(path);self.assertEqual(r.status,200)
         self.assertEqual((await self.client.get('/storefront/bot.py')).status,404)
         self.assertEqual((await self.client.get('/store-media/../bot.py')).status,404)
+        self.assertEqual((await self.client.get('/store-media/%D0%BA%D0%B0%D1%82%D0%B0%D0%BB%D0%BE%D0%B3.jpg')).status,404)
     async def test_catalog_public_no_secret_stock_and_hidden_products(self):
         hidden=await self.db.save_product(dict(name='Hidden',description='private',price='1',is_active=False))
         r,d=await self.request('catalog',headers={});self.assertEqual(r.status,200)
-        self.assertNotIn('credential',json.dumps(d));self.assertNotIn(hidden['id'],[p['id'] for p in d['products']])
+        self.assertNotIn('credential',json.dumps(d));self.assertNotIn('cover',d['products'][0]);self.assertNotIn(hidden['id'],[p['id'] for p in d['products']])
         self.assertEqual(d['products'][0]['stock'],4);self.assertEqual(d['products'][0]['price'],'2.50')
     async def test_inactive_category_hides_and_blocks_product(self):
         c=await self.db.save_category(dict(name='ChatGPT',is_active=False))

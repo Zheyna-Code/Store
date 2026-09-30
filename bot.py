@@ -1003,7 +1003,7 @@ async def start_health_server() -> web.AppRunner:
     """Поднимает HTTP-сервер магазина и закрытой админ-панели."""
     app = web.Application()
     global shop_site
-    shop_site=ShopSite(get_database,get_payments,settings.token,settings.shop_url,exchange_rates,COVERS_DIR,
+    shop_site=ShopSite(get_database,get_payments,settings.token,settings.shop_url,exchange_rates,
         {"warranty":settings.warranty_url,"terms":settings.terms_url,"privacy":settings.privacy_url})
     shop_site.setup(app)
     app.router.add_get("/health", health)

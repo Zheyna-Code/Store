@@ -1,7 +1,4 @@
 """Public shop, same-origin authenticated API and existing payment service integration."""
-import asyncio
-import hashlib
-import io
 import functools
 import hmac
 import json
@@ -10,7 +7,7 @@ import time
 from collections import OrderedDict
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import urlparse,urlencode,quote
+from urllib.parse import urlparse
 
 from aiohttp import web
 from crypto_pay import money,quantity,PaymentError
@@ -21,9 +18,6 @@ from web_auth import WebAuth,validate_init_data
 SESSION_COOKIE='__Host-nexus_session'
 LOGIN_COOKIE='__Host-nexus_login'
 FILES=Path(__file__).resolve().parent/'storefront'
-COVERS={'chatgpt':'chatgpt.png','claude':'claude-cover.png','gemini':'gemini-cover.png','notion':'notion-cover.png',
-        'grok':'grok-cover.png','perplexity':'perplexity-cover.png','netflix':'нетфликс.png','spotify':'спотифай.png',
-        'duolingo':'duolingo.png','capcut':'capcut-cover.png'}
 CSP="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
 
 
@@ -49,13 +43,13 @@ def api(fn):
 
 
 class ShopSite:
-    def __init__(self,get_db,get_payments,token,site_url,rates,covers,policies=None):
+    def __init__(self,get_db,get_payments,token,site_url,rates,policies=None):
         self.get_db=get_db;self.get_payments=get_payments;self.token=token
         parsed=urlparse(site_url)
         if parsed.scheme!='https' or not parsed.netloc or parsed.username or parsed.path not in {'','/'} or parsed.query or parsed.fragment:
             raise ValueError('SHOP_URL должен быть полным HTTPS адресом без параметров.')
         self.origin=f'{parsed.scheme}://{parsed.netloc}';self.site_url=site_url.rstrip('/')+'/'
-        self.rates=rates;self.covers=Path(covers);self.auth=WebAuth(get_db);self.limits=OrderedDict();self.thumbs={};self.image_lock=asyncio.Lock()
+        self.rates=rates;self.auth=WebAuth(get_db);self.limits=OrderedDict()
         self.policies={k:v for k,v in (policies or {}).items() if v and urlparse(v).scheme=='https'}
 
     def limit(self,key,maximum=30):
@@ -97,28 +91,6 @@ class ShopSite:
         if name not in {'shop.css','shop.js','icon.svg'}:raise web.HTTPNotFound()
         return web.FileResponse(FILES/name,headers={'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'})
 
-    async def media(self,request):
-        name=request.match_info['name']
-        if name not in set(COVERS.values())|{'каталог.jpg'}:raise web.HTTPNotFound()
-        path=self.covers/name
-        if not path.is_file():raise web.HTTPNotFound()
-        from PIL import Image
-        stamp=path.stat().st_mtime_ns
-        async with self.image_lock:
-            if name not in self.thumbs or self.thumbs[name][0]!=stamp:
-                def thumbnail():
-                    with Image.open(path) as image:
-                        image.thumbnail((960,540))
-                        stream=io.BytesIO();image.convert('RGB').save(stream,'WEBP',quality=82)
-                        return stream.getvalue()
-                data=await asyncio.to_thread(thumbnail)
-                self.thumbs[name]=(stamp,data)
-            data=self.thumbs[name][1]
-        etag='"'+hashlib.sha256(data).hexdigest()+'"'
-        headers={'Cache-Control':'public, max-age=86400','ETag':etag,'X-Content-Type-Options':'nosniff'}
-        if request.headers.get('If-None-Match')==etag:return web.Response(status=304,headers=headers)
-        return web.Response(body=data,content_type='image/webp',headers=headers)
-
     @api
     async def catalog(self,request):
         self.limit(('catalog',request.remote),120)
@@ -129,10 +101,8 @@ class ShopSite:
             WHERE p.is_active AND (p.category_id IS NULL OR c.is_active) GROUP BY p.id,c.name ORDER BY p.created_at DESC LIMIT 1000""")
         products=[]
         for r in rows:
-            cover=COVERS.get((r['category_name'] or '').lower())
             products.append({'id':r['id'],'name':r['name'],'description':''.join(part.get('text',part.get('emoji','')) for part in description_parts(r['description'])),
-                'price':str(r['price']),'category_id':r['category_id'],'category_name':r['category_name'] or 'Другое','stock':r['stock_count'],
-                'cover':'/store-media/'+quote(cover) if cover else None})
+                'price':str(r['price']),'category_id':r['category_id'],'category_name':r['category_name'] or 'Другое','stock':r['stock_count']})
         return web.json_response({'categories':[{'id':c['id'],'name':c['name']} for c in categories],'products':products,'policies':self.policies})
 
     @api
@@ -235,7 +205,6 @@ class ShopSite:
     def setup(self,app):
         app.router.add_get('/',self.index)
         app.router.add_get('/storefront/{name}',self.asset)
-        app.router.add_get('/store-media/{name}',self.media)
         routes=[('GET','catalog',self.catalog),('GET','rate',self.rate),('POST','auth/telegram',self.mini_login),
             ('POST','auth/link',self.login_link),('GET','auth/status',self.login_status),('GET','me',self.me),('POST','auth/logout',self.logout),
             ('POST','checkout',self.checkout),('GET','payments/{id}',self.payment),('POST','payments/{id}/check',self.check_payment),
