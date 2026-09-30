@@ -7,6 +7,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 
 from crypto_pay import money, quantity, validate_invoice
+from referrals import lock_purchase_accounts, award_referral
 
 PAYMENT_SCHEMA = """
 ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS reservation_key TEXT;
@@ -182,7 +183,10 @@ class PaymentStore:
                     await c.execute('UPDATE stock_items SET reservation_key=NULL,reserved_until=NULL WHERE reservation_key=$1', p['payload'])
                     await c.execute("UPDATE orders SET status='expired' WHERE id=$1 AND status='pending'", p['order_id'])
                 return await c.fetchrow('SELECT * FROM payments WHERE id=$1', p['id'])
-            await c.fetchval('SELECT telegram_id FROM customers WHERE telegram_id=$1 FOR UPDATE', p['customer_id'])
+            if p['purpose'] == 'product':
+                await lock_purchase_accounts(c, p['customer_id'])
+            else:
+                await c.fetchval('SELECT telegram_id FROM customers WHERE telegram_id=$1 FOR UPDATE', p['customer_id'])
             outcome = 'topup'
             stock = []
             if p['purpose'] == 'product':
@@ -200,6 +204,8 @@ class PaymentStore:
                     stock = []
                 await c.execute("""UPDATE orders SET status=$1,provider_invoice_id=$2,stock_item_id=$3 WHERE id=$4""",
                                 'paid' if outcome == 'product' else 'paid_no_stock', invoice['invoice_id'], stock[0]['id'] if stock else None, p['order_id'])
+            if outcome == 'product':
+                await award_referral(c, p['customer_id'], p['order_id'], p['amount'])
             if outcome != 'product':
                 await c.execute('UPDATE customers SET balance=balance+$1 WHERE telegram_id=$2', p['amount'], p['customer_id'])
                 await c.execute('INSERT INTO balance_transactions(customer_id,amount,reason) VALUES($1,$2,$3)', p['customer_id'], p['amount'],
@@ -218,7 +224,7 @@ class PaymentStore:
                 return p
             if p['status'] != 'balance_ready' or p['expires_at'] <= datetime.now(timezone.utc):
                 raise ValueError('Счёт уже закрыт. Откройте карточку товара снова.')
-            customer = await c.fetchrow('SELECT * FROM customers WHERE telegram_id=$1 FOR UPDATE', customer_id)
+            customer = await lock_purchase_accounts(c, customer_id)
             if customer['balance'] < p['amount']:
                 raise ValueError('Недостаточно средств на балансе.')
             await c.fetchval('SELECT id FROM products WHERE id=$1 FOR UPDATE', p['product_id'])
@@ -229,6 +235,7 @@ class PaymentStore:
             await c.execute('INSERT INTO balance_transactions(customer_id,amount,reason) VALUES($1,$2,$3)', customer_id, -p['amount'], f"Покупка #{p['order_id']}")
             await c.execute('UPDATE stock_items SET is_issued=TRUE,issued_at=NOW(),reservation_key=NULL,reserved_until=NULL WHERE id=ANY($1::bigint[])', [s['id'] for s in stock])
             await c.execute("UPDATE orders SET status='paid',provider='balance',stock_item_id=$1 WHERE id=$2", stock[0]['id'], p['order_id'])
+            await award_referral(c, customer_id, p['order_id'], p['amount'])
             return await c.fetchrow("UPDATE payments SET status='paid',provider='balance',outcome='product',delivery_items=$1::jsonb WHERE id=$2 RETURNING *", json.dumps([s['payload'] for s in stock]), p['id'])
 
     async def pending(self):

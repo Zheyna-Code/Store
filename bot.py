@@ -25,6 +25,7 @@ from aiogram.types import (
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    CopyTextButton,
     Message,
 )
 
@@ -38,6 +39,7 @@ from exchange_rates import ExchangeRates
 from crypto_pay import CryptoPay, PaymentError, money, quantity, valid_signature
 from payments import Payments
 from quantity_emoji import QuantityEmoji
+from referrals import referral_link, start_referrer
 
 exchange_rates = ExchangeRates()
 quantity_emoji = QuantityEmoji()
@@ -347,11 +349,9 @@ async def show_category(message: Message, category_id: int) -> None:
 @router.message(Command("start", "menu"))
 async def command_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await get_database().upsert_customer(
-        message.from_user.id,
-        message.from_user.username,
-        message.from_user.first_name,
-    )
+    user = message.from_user
+    referrer = start_referrer(message.text) if message.chat.type == "private" else None
+    await get_database().upsert_customer(user.id, user.username, user.first_name, referrer)
     # Считаем уникальные визиты в магазин по Telegram ID, без учёта health-check.
     await get_database().visit("telegram-menu", str(message.from_user.id))
     filename, caption, keyboard = SCREENS["menu"]
@@ -383,13 +383,14 @@ async def open_profile(callback: CallbackQuery, state: FSMContext) -> None:
     user = callback.from_user
     await get_database().upsert_customer(user.id, user.username, user.first_name)
     customer = await get_database().customer(user.id)
+    stats = await get_database().referral_stats(user.id)
     username = f"@{html.escape(user.username)}" if user.username else "@не указан"
     caption = (
         f"<b>Профиль</b> {premium_emoji(EMOJI['profile'], '👤')}\n\n"
         f"{username} | <code>{user.id}</code>\n\n"
         f"Баланс: <b>{dollars(str(customer['balance']) if customer else '0.00')}</b>\n"
-        f"Рефералов: <b>0</b> {premium_emoji(EMOJI['friends'], '👥')}\n"
-        f"Покупок: <b>0</b> {premium_emoji(EMOJI['card'], '💳')}"
+        f"Рефералов: <b>{stats['invited']}</b> {premium_emoji(EMOJI['friends'], '👥')}\n"
+        f"Покупок: <b>{stats['purchases']}</b> {premium_emoji(EMOJI['card'], '💳')}"
     )
     await callback.message.answer_photo(
         FSInputFile(COVERS_DIR / "профиль.jpg"),
@@ -574,6 +575,38 @@ async def pay_balance(callback: CallbackQuery):
         await callback.message.answer("Покупка подтверждена ✅ Товар придёт отдельным сообщением.")
     except (ValueError, PaymentError) as exc:
         await callback.message.answer(html.escape(str(exc)))
+
+
+@router.callback_query(F.data == "bonus")
+async def open_bonus(callback: CallbackQuery, state: FSMContext):
+    if not private_checkout(callback):
+        await callback.answer("Откройте «Бонус» в личном чате с ботом.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    user = callback.from_user
+    await get_database().upsert_customer(user.id, user.username, user.first_name)
+    stats = await get_database().referral_stats(user.id)
+    link = referral_link(user.id)
+    text = (f"<b>Бонус</b> {premium_emoji(EMOJI['bonus'], '🎁')}\n\n"
+        "Пригласи друга по своей ссылке и получи <b>5% от его первой покупки</b> на баланс магазина.\n\n"
+        f"Твоя реферальная ссылка:\n<code>{link}</code>\n\n"
+        f"Приглашено друзей: <b>{stats['invited']}</b>\n"
+        f"Начислено бонусов: <b>{dollars(stats['earned'])} USD</b>\n\n"
+        "Бонус начисляется после успешной покупки товара, не за пополнение. Ссылка действует для новых пользователей.")
+    share = "https://t.me/share/url?" + urlencode({'url':link,'text':'Магазин Nexus Store — подписки и цифровые товары.'})
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Скопировать ссылку", copy_text=CopyTextButton(text=link), style="primary")],
+        [premium_link_button("Пригласить друга", share, EMOJI['friends'], style="success")],
+        [premium_button("Назад", "menu", EMOJI['back'], style="danger")],
+    ])
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    filename = COVERS_DIR / 'бонус.jpg'
+    if filename.exists():
+        await callback.message.answer_photo(FSInputFile(filename), caption=text, reply_markup=keyboard)
+    else:
+        await callback.message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.in_(SCREENS.keys()))
