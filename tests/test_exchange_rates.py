@@ -77,13 +77,14 @@ class ExchangeRateTests(unittest.IsolatedAsyncioTestCase):
         with patch('exchange_rates.time.monotonic', return_value=90000):
             self.assertIsNone(await service.quote())
 
-    async def test_summary_displays_both_and_date(self):
+    async def test_summary_displays_both_without_rate_details(self):
         with patch.object(bot.exchange_rates, 'quote', AsyncMock(return_value=parse_cbr_daily(XML))):
             text = await bot.payment_summary('77')
         self.assertIn('77.00', text)
         self.assertIn('USD', text)
         self.assertIn('6 939,50 ₽', text)
-        self.assertIn('30.09.2026', text)
+        self.assertNotIn('ЦБ', text)
+        self.assertNotIn('30.09.2026', text)
 
     async def test_summary_during_outage_still_shows_usd(self):
         with patch.object(bot.exchange_rates, 'quote', AsyncMock(return_value=None)):
@@ -93,17 +94,20 @@ class ExchangeRateTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('≈', text)
 
     async def test_payment_invoice_amount_remains_usd(self):
-        order = {'id': 1, 'name': 'Gemini', 'price': '77.00'}
-        db = SimpleNamespace(upsert_customer=AsyncMock(), create_crypto_order=AsyncMock(return_value=order), set_crypto_invoice=AsyncMock())
-        callback = SimpleNamespace(data='buy:2', from_user=SimpleNamespace(id=10, username='test', first_name='Test'), answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()))
-        invoice = AsyncMock(return_value={'invoice_id': 1, 'pay_url': 'https://example.invalid/pay'})
-        with patch.object(bot, 'database', db), patch.object(bot, 'settings', SimpleNamespace(crypto_pay_token='test')), patch.object(bot, 'create_crypto_invoice', invoice), patch.object(bot.exchange_rates, 'quote', AsyncMock(return_value=parse_cbr_daily(XML))):
-            await bot.buy_product(callback)
-        invoice.assert_awaited_once_with(order)
-        self.assertEqual(order['price'], '77.00')
-        text = callback.message.answer.call_args.args[0]
+        from crypto_pay import CryptoPay
+        payment = {'id': 1, 'product_name': 'Gemini', 'amount': Decimal('77.00'),
+                   'quantity': 1, 'purpose': 'product', 'payload': 'shop:test'}
+        client = CryptoPay('test')
+        client.request = AsyncMock(return_value={})
+        await client.create(payment)
+        data = client.request.call_args.args[1]
+        self.assertEqual(data['amount'], '77.00')
+        self.assertEqual(data['fiat'], 'USD')
+        with patch.object(bot.exchange_rates, 'quote', AsyncMock(return_value=parse_cbr_daily(XML))):
+            text = await bot.payment_summary(str(payment['amount']))
         self.assertIn('77.00', text)
         self.assertIn('6 939,50 ₽', text)
+        self.assertNotIn('ЦБ', text)
 
     async def test_wallet_payment_options_show_both(self):
         message = SimpleNamespace(delete=AsyncMock(), answer=AsyncMock())
