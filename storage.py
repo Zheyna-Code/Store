@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from emoji_library import validate_emoji_id
 from payment_store import PAYMENT_SCHEMA
+from referrals import REFERRAL_SCHEMA, MAX_USER_ID
 
 from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
@@ -99,7 +100,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_item_id BIGINT REFERENCES stoc
 CREATE UNIQUE INDEX IF NOT EXISTS orders_provider_invoice_id_idx ON orders(provider_invoice_id) WHERE provider_invoice_id IS NOT NULL;
 """
 
-SCHEMA += PAYMENT_SCHEMA
+SCHEMA += PAYMENT_SCHEMA + REFERRAL_SCHEMA
 
 
 class Database:
@@ -128,14 +129,26 @@ class Database:
             raise RuntimeError("База данных ещё не подключена")
         return self.pool
 
-    async def upsert_customer(self, telegram_id: int, username: str | None, first_name: str) -> None:
+    async def upsert_customer(self, telegram_id: int, username: str | None, first_name: str, referrer_id: int | None = None) -> None:
+        if not isinstance(referrer_id, int) or isinstance(referrer_id, bool) or not 0 < referrer_id <= MAX_USER_ID:
+            referrer_id = None
+        # Attach an inviter only on initial registration. Existing users can't rebind;
+        # self-referrals and unknown inviter IDs are ignored in the same SQL statement.
         await self._pool().execute(
-            """INSERT INTO customers(telegram_id, username, first_name)
-               VALUES($1, $2, $3)
-               ON CONFLICT (telegram_id) DO UPDATE SET username = EXCLUDED.username,
-               first_name = EXCLUDED.first_name, last_seen_at = NOW()""",
-            telegram_id, username, first_name,
+            """INSERT INTO customers(telegram_id, username, first_name, referred_by)
+               VALUES($1,$2,$3,CASE WHEN $4::bigint IS NOT NULL AND $4<>$1
+                   AND EXISTS(SELECT 1 FROM customers WHERE telegram_id=$4) THEN $4 ELSE NULL END)
+               ON CONFLICT (telegram_id) DO UPDATE SET username=EXCLUDED.username,
+                   first_name=EXCLUDED.first_name, last_seen_at=NOW()""",
+            telegram_id, username, first_name, referrer_id,
         )
+
+    async def referral_stats(self, telegram_id: int) -> dict[str, Any]:
+        row = await self._pool().fetchrow("""SELECT
+            (SELECT COUNT(*) FROM customers WHERE referred_by=$1) AS invited,
+            (SELECT COALESCE(SUM(amount),0) FROM referral_rewards WHERE referrer_id=$1) AS earned,
+            (SELECT COUNT(*) FROM orders WHERE customer_id=$1 AND status='paid') AS purchases""", telegram_id)
+        return public_row(row)
 
     async def customer(self, telegram_id: int) -> asyncpg.Record | None:
         return await self._pool().fetchrow("SELECT * FROM customers WHERE telegram_id=$1", telegram_id)
