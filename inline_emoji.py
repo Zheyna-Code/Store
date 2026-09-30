@@ -44,7 +44,7 @@ class InlineCatalog:
             counts[item["pack"]] = counts.get(item["pack"], 0) + 1
             self.positions[item["id"]] = counts[item["pack"]]
 
-    def page(self, query, offset=""):
+    def page(self, query, offset="", page_size=PAGE_SIZE):
         text, separator, search = query.partition("|")
         text = text.strip()
         search = normalized(search.strip()) if separator else ""
@@ -57,7 +57,7 @@ class InlineCatalog:
         index = int(offset or "0")
         if index > len(rows):
             return text, [], ""
-        stop = index + PAGE_SIZE
+        stop = index + page_size
         return text, rows[index:stop], str(stop) if stop < len(rows) else ""
 
 

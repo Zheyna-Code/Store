@@ -14,6 +14,7 @@ from aiogram.methods import AnswerInlineQuery
 from PIL import Image
 
 import bot
+from direct_emoji import DraftStore
 from inline_emoji import (InlineCatalog, InlineThumbnails, PAGE_SIZE, compose, jpeg_thumbnail,
                           public_base, result_for, signature, thumbnail_url, valid_thumbnail)
 
@@ -126,36 +127,36 @@ class AsyncInlineTests(unittest.IsolatedAsyncioTestCase):
             # The original Telegram metadata wins over catalog Unicode labels.
             return {emoji_id: dict(available=True, emoji='🌟') for emoji_id in ids}
         self.library.previews = AsyncMock(side_effect=previews)
-        self.query = SimpleNamespace(query='A&B | звезда', offset='', bot=object(), answer=AsyncMock())
+        self.store = DraftStore()
+        self.query = SimpleNamespace(query='A&B | звезда', offset='', from_user=SimpleNamespace(id=1), bot=object(), answer=AsyncMock())
 
     async def invoke(self):
-        with patch.object(bot, 'settings', self.settings), patch.object(bot, 'inline_catalog', self.catalog), patch.object(bot, 'emoji_library', self.library):
+        with patch.object(bot, 'settings', self.settings), patch.object(bot, 'inline_catalog', self.catalog), patch.object(bot, 'emoji_library', self.library), patch.object(bot, 'direct_drafts', self.store):
             await bot.inline_compose(self.query)
 
-    async def test_inline_returns_real_ids_and_private_cache(self):
+    async def test_inline_handoff_preserves_text_without_sending_unicode(self):
         await self.invoke()
-        results = self.query.answer.call_args.args[0]
-        self.assertEqual(len(results), PAGE_SIZE)
-        self.assertIn('A&amp;B', results[0].input_message_content.message_text)
-        self.assertIn('🌟', results[0].input_message_content.message_text)
-        self.assertIn(f'emoji-id="{ITEMS[1]["id"]}"', results[0].input_message_content.message_text)
-        self.assertTrue(self.query.answer.call_args.kwargs['is_personal'])
-        self.assertEqual(self.query.answer.call_args.kwargs['next_offset'], str(PAGE_SIZE))
-        self.assertEqual(self.query.answer.call_args.kwargs['cache_time'], 10)
+        self.assertEqual(self.query.answer.call_args.args[0], [])
+        options = self.query.answer.call_args.kwargs
+        self.assertTrue(options['is_personal'])
+        self.assertEqual(options['cache_time'], 0)
+        token = options['button'].start_parameter.removeprefix('e_')
+        self.assertEqual(self.store.get(token, 1).query, 'A&B | звезда')
+        self.assertIsNone(self.store.get(token, 2))
+        self.library.previews.assert_not_awaited()
 
-    async def test_missing_address_gives_setup_help_no_unicode_substitute(self):
+    async def test_handoff_needs_no_public_address(self):
         self.settings.public_base_url = ''
         await self.invoke()
         self.assertEqual(self.query.answer.call_args.args[0], [])
-        self.assertEqual(self.query.answer.call_args.kwargs['button'].start_parameter, 'inline_help')
+        self.assertTrue(self.query.answer.call_args.kwargs['button'].start_parameter.startswith('e_'))
         self.library.previews.assert_not_awaited()
 
-    async def test_api_premium_denial_gives_help(self):
-        self.query.answer.side_effect = [TelegramBadRequest(method=AnswerInlineQuery(inline_query_id='test', results=[]), message='CUSTOM_EMOJI_NOT_ALLOWED'), True]
+    async def test_notice_api_error_is_ignored_without_substitute(self):
+        self.query.answer.side_effect = TelegramBadRequest(method=AnswerInlineQuery(inline_query_id='test', results=[]), message='query is invalid')
         await self.invoke()
-        self.assertEqual(self.query.answer.await_count, 2)
+        self.assertEqual(self.query.answer.await_count, 1)
         self.assertEqual(self.query.answer.call_args.args[0], [])
-        self.assertEqual(self.query.answer.call_args.kwargs['button'].start_parameter, 'inline_error')
 
     async def test_expired_query_is_ignored_without_spamming(self):
         self.query.answer.side_effect = TelegramBadRequest(method=AnswerInlineQuery(inline_query_id='test', results=[]), message='query is invalid')
@@ -211,8 +212,9 @@ class AsyncInlineTests(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(clear=AsyncMock())
         with patch.object(bot, 'settings', self.settings), patch.object(bot, 'get_database', side_effect=AssertionError('No shop mutation')):
             await bot.command_menu(message, state)
-        self.assertIn('@TestBot', message.answer.call_args.args[0])
-        self.assertEqual(message.answer.call_args.kwargs['reply_markup'].inline_keyboard[0][0].switch_inline_query, 'Привет! | ⭐')
+        self.assertIn('от бота', message.answer.call_args.args[0])
+        self.assertIn('/emoji Привет!', message.answer.call_args.args[0])
+        self.assertNotIn('switch_inline_query', str(message.answer.call_args.kwargs))
 
 
 if __name__ == '__main__':
