@@ -22,6 +22,11 @@ class EmojiDraft:
     offset: int = 0
     allowed: dict = field(default_factory=dict)
     sent: bool = False
+    secretary: bool = False
+    business_connection_id: str | None = None
+    target_chat_id: int | None = None
+    target_title: str = ""
+    destinations: dict = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
