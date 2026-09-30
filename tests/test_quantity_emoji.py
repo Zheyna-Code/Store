@@ -80,7 +80,7 @@ class QuantityEmojiTests(unittest.IsolatedAsyncioTestCase):
         text=cb.message.answer.call_args.args[0]
         buttons=[b for row in cb.message.answer.call_args.kwargs['reply_markup'].inline_keyboard for b in row]
         self.assertNotIn('К оплате',text);self.assertNotIn('В рублях',text);self.assertNotIn('Счёт действителен',text)
-        self.assertEqual([b.style for b in buttons[:4]],['primary']*4)
+        self.assertEqual([b.style for b in buttons[:4]],['primary','primary','primary','success'])
         self.assertEqual(buttons[0].icon_custom_emoji_id,MINUS_ID)
         self.assertEqual(buttons[2].icon_custom_emoji_id,PLUS_ID)
         self.assertEqual(buttons[1].text,'2 шт.')

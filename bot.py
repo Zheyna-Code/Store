@@ -330,6 +330,7 @@ async def show_category(message: Message, category_id: int) -> None:
         f"{p['name']} · ${Decimal(p['price']):.2f}" + (" · нет в наличии" if not p["stock_count"] else ""),
         f"product:{p['id']}",
         emoji_id,
+        style="success" if p["stock_count"] > 0 else "danger",
     )] for p in products]
     rows.append([premium_button("Назад к категориям", "catalog", EMOJI["back"], style="danger")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -467,7 +468,7 @@ async def _render_product(callback: CallbackQuery, product: dict, count: int) ->
             button(f"{count} шт.", "quantity_info", style="primary"),
             quantity_button("+", f"qty:{product['id']}:{min(available, 100, count + 1)}", icons.get('plus')),
         ])
-        rows.append([premium_button("Способы оплаты", f"pay_methods:{product['id']}:{count}", EMOJI['card'], style="primary")])
+        rows.append([premium_button("Способы оплаты", f"pay_methods:{product['id']}:{count}", EMOJI['card'], style="success")])
     rows.append([premium_button("Назад к категории" if product['category_id'] else "Назад в каталог",
         f"category:{product['category_id']}" if product['category_id'] else "catalog", EMOJI['back'], style="danger")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
