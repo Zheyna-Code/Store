@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import bot
@@ -26,10 +27,11 @@ class DescriptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_stored_description_reaches_final_message(self):
         description='План <tg-emoji emoji-id="5843843420468024653">⭐️</tg-emoji>\nДоступ на месяц'
         product=dict(id=2,name='Gemini 18m',category_name='Gemini',description=description,price='77',category_id=3,is_active=True)
-        db=SimpleNamespace(product=AsyncMock(return_value=product),stock=AsyncMock(return_value=[]))
-        message=SimpleNamespace(answer=AsyncMock())
-        callback=SimpleNamespace(data='product:2',message=message,answer=AsyncMock())
-        with patch.object(bot,'database',db):await bot.open_product(callback)
+        db=SimpleNamespace(product=AsyncMock(return_value=product),upsert_customer=AsyncMock())
+        service=SimpleNamespace(store=SimpleNamespace(available=AsyncMock(return_value=0)),lock=lambda *args: asyncio.Lock())
+        message=SimpleNamespace(answer=AsyncMock(),chat=SimpleNamespace(type="private",id=10))
+        callback=SimpleNamespace(data='product:2',message=message,answer=AsyncMock(),from_user=SimpleNamespace(id=10,username='test',first_name='Test'))
+        with patch.object(bot,'database',db),patch.object(bot,'payments',service):await bot.open_product(callback)
         final=message.answer.call_args.args[0]
         self.assertIn('<tg-emoji emoji-id="5843843420468024653">⭐️</tg-emoji>',final)
         self.assertNotIn('&lt;tg-emoji',final)

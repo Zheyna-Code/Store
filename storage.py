@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from emoji_library import validate_emoji_id
+from payment_store import PAYMENT_SCHEMA
 
 from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
@@ -98,6 +99,8 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_item_id BIGINT REFERENCES stoc
 CREATE UNIQUE INDEX IF NOT EXISTS orders_provider_invoice_id_idx ON orders(provider_invoice_id) WHERE provider_invoice_id IS NOT NULL;
 """
 
+SCHEMA += PAYMENT_SCHEMA
+
 
 class Database:
     def __init__(self, dsn: str) -> None:
@@ -143,7 +146,7 @@ class Database:
             COALESCE(SUM(amount) FILTER (WHERE created_at >= date_trunc('day', NOW())), 0) AS today_revenue,
             COUNT(*) AS orders FROM orders WHERE status='paid'""")
         visits = await p.fetchval("SELECT COUNT(DISTINCT COALESCE(visitor_key, id::text)) FROM page_visits WHERE created_at >= date_trunc('day', NOW())")
-        top_categories = await p.fetch("""SELECT COALESCE(c.name, 'Без категории') AS name, COUNT(o.id) AS sales,
+        top_categories = await p.fetch("""SELECT COALESCE(c.name, 'Без категории') AS name, SUM(o.quantity) AS sales,
             COALESCE(SUM(o.amount), 0) AS revenue FROM categories c
             RIGHT JOIN products p ON p.category_id=c.id RIGHT JOIN orders o ON o.product_id=p.id
             WHERE o.status='paid' GROUP BY c.name ORDER BY revenue DESC, sales DESC LIMIT 50""")
@@ -169,7 +172,7 @@ class Database:
         visits = await p.fetch(f"""SELECT {day_sql} AS day, COUNT(DISTINCT COALESCE(visitor_key, id::text)) AS n
             FROM page_visits WHERE created_at >= $1 GROUP BY 1""", previous_start, tz_offset)
         statuses = await p.fetch("SELECT status, COUNT(*) AS n FROM orders WHERE created_at >= $1 GROUP BY status", current_start)
-        top = await p.fetch("""SELECT COALESCE(p.name, 'Удалённый товар') AS name, COUNT(o.id) AS sales, COALESCE(SUM(o.amount), 0) AS revenue
+        top = await p.fetch("""SELECT COALESCE(p.name, 'Удалённый товар') AS name, SUM(o.quantity) AS sales, COALESCE(SUM(o.amount), 0) AS revenue
             FROM orders o LEFT JOIN products p ON p.id=o.product_id
             WHERE o.status='paid' AND o.created_at >= $1 GROUP BY p.id, p.name ORDER BY revenue DESC, sales DESC LIMIT 8""", current_start)
         series = {first + timedelta(days=i): {"revenue": 0.0, "orders": 0, "customers": 0, "visits": 0} for i in range(days)}
@@ -240,7 +243,7 @@ class Database:
 
     async def list_products(self) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("""SELECT p.*, c.name AS category_name,
-             COUNT(s.id) FILTER (WHERE NOT s.is_issued) AS stock_count
+             COUNT(s.id) FILTER (WHERE NOT s.is_issued AND (s.reserved_until IS NULL OR s.reserved_until <= NOW())) AS stock_count
              FROM products p LEFT JOIN categories c ON c.id=p.category_id
              LEFT JOIN stock_items s ON s.product_id=p.id GROUP BY p.id, c.name ORDER BY p.created_at DESC""")
         return [public_row(row) for row in rows]
@@ -252,49 +255,17 @@ class Database:
         return public_row(row) if row else None
 
     async def active_products(self) -> list[dict[str, Any]]:
-        rows = await self._pool().fetch("""SELECT p.*, COUNT(s.id) FILTER (WHERE NOT s.is_issued) AS stock_count
+        rows = await self._pool().fetch("""SELECT p.*, COUNT(s.id) FILTER (WHERE NOT s.is_issued AND (s.reserved_until IS NULL OR s.reserved_until <= NOW())) AS stock_count
             FROM products p LEFT JOIN stock_items s ON s.product_id=p.id
-            WHERE p.is_active GROUP BY p.id HAVING COUNT(s.id) FILTER (WHERE NOT s.is_issued) > 0 ORDER BY p.created_at DESC""")
+            WHERE p.is_active GROUP BY p.id HAVING COUNT(s.id) FILTER (WHERE NOT s.is_issued AND (s.reserved_until IS NULL OR s.reserved_until <= NOW())) > 0 ORDER BY p.created_at DESC""")
         return [public_row(row) for row in rows]
 
     async def category_products(self, category_id: int) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("""SELECT p.id, p.name, p.description, p.price,
-            COUNT(s.id) FILTER (WHERE NOT s.is_issued) AS stock_count
+            COUNT(s.id) FILTER (WHERE NOT s.is_issued AND (s.reserved_until IS NULL OR s.reserved_until <= NOW())) AS stock_count
             FROM products p LEFT JOIN stock_items s ON s.product_id=p.id
             WHERE p.category_id=$1 AND p.is_active GROUP BY p.id ORDER BY p.created_at DESC""", category_id)
         return [public_row(row) for row in rows]
-
-    async def create_crypto_order(self, customer_id: int, product_id: int) -> dict[str, Any]:
-        async with self._pool().acquire() as connection, connection.transaction():
-            product = await connection.fetchrow("""SELECT p.* FROM products p WHERE p.id=$1 AND p.is_active
-                AND EXISTS(SELECT 1 FROM stock_items s WHERE s.product_id=p.id AND NOT s.is_issued) FOR UPDATE""", product_id)
-            if not product:
-                raise ValueError("Товар недоступен или закончился")
-            row = await connection.fetchrow("""INSERT INTO orders(customer_id, product_id, amount, status, provider)
-                VALUES($1,$2,$3,'pending','crypto_pay') RETURNING *""", customer_id, product_id, product["price"])
-            return {"id": row["id"], "name": product["name"], "price": str(product["price"])}
-
-    async def set_crypto_invoice(self, order_id: int, invoice_id: int) -> None:
-        await self._pool().execute("UPDATE orders SET provider_invoice_id=$1 WHERE id=$2 AND status='pending'", invoice_id, order_id)
-
-    async def cancel_order(self, order_id: int) -> None:
-        await self._pool().execute("UPDATE orders SET status='cancelled' WHERE id=$1 AND status='pending'", order_id)
-
-    async def finalize_crypto_order(self, invoice_id: int) -> dict[str, Any] | None:
-        """Atomically marks the invoice paid and reserves exactly one stock item."""
-        async with self._pool().acquire() as connection, connection.transaction():
-            order = await connection.fetchrow("SELECT * FROM orders WHERE provider='crypto_pay' AND provider_invoice_id=$1 FOR UPDATE", invoice_id)
-            if not order or order["status"] != "pending":
-                return None
-            stock = await connection.fetchrow("""SELECT id, payload FROM stock_items WHERE product_id=$1 AND NOT is_issued
-                ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1""", order["product_id"])
-            if not stock:
-                await connection.execute("UPDATE orders SET status='paid_no_stock' WHERE id=$1", order["id"])
-                return {"customer_id": order["customer_id"], "out_of_stock": True}
-            await connection.execute("UPDATE stock_items SET is_issued=TRUE, issued_at=NOW() WHERE id=$1", stock["id"])
-            await connection.execute("UPDATE orders SET status='paid', stock_item_id=$1 WHERE id=$2", stock["id"], order["id"])
-            product_name = await connection.fetchval("SELECT name FROM products WHERE id=$1", order["product_id"])
-            return {"customer_id": order["customer_id"], "product_name": product_name, "payload": stock["payload"], "out_of_stock": False}
 
     async def save_product(self, data: dict[str, Any], product_id: int | None = None) -> dict[str, Any]:
         values = (data["name"], data.get("description", ""), Decimal(str(data["price"])), data.get("category_id"), data.get("is_active", True))
@@ -307,9 +278,12 @@ class Database:
         return public_row(row)
 
     async def delete_product(self, product_id: int) -> None:
-        result = await self._pool().execute("DELETE FROM products WHERE id=$1", product_id)
-        if result.endswith("0"):
-            raise ValueError("Товар не найден")
+        async with self._pool().acquire() as c, c.transaction():
+            if not await c.fetchval("SELECT id FROM products WHERE id=$1 FOR UPDATE", product_id):
+                raise ValueError("Товар не найден")
+            if await c.fetchval("SELECT EXISTS(SELECT 1 FROM stock_items WHERE product_id=$1 AND NOT is_issued AND reserved_until>NOW())", product_id):
+                raise ValueError("Товар зарезервирован под счёт. Удаление доступно после оплаты или истечения счёта.")
+            await c.execute("DELETE FROM products WHERE id=$1", product_id)
 
     async def stock(self, product_id: int) -> list[dict[str, Any]]:
         rows = await self._pool().fetch("SELECT * FROM stock_items WHERE product_id=$1 ORDER BY id", product_id)
@@ -317,9 +291,12 @@ class Database:
 
     async def replace_stock(self, product_id: int, items: list[str]) -> None:
         async with self._pool().acquire() as connection, connection.transaction():
-            exists = await connection.fetchval("SELECT EXISTS(SELECT 1 FROM products WHERE id=$1)", product_id)
+            exists = await connection.fetchval("SELECT id FROM products WHERE id=$1 FOR UPDATE", product_id)
             if not exists:
                 raise ValueError("Товар не найден")
+            reserved = await connection.fetchval("SELECT EXISTS(SELECT 1 FROM stock_items WHERE product_id=$1 AND NOT is_issued AND reserved_until>NOW())", product_id)
+            if reserved:
+                raise ValueError("Есть товар, зарезервированный под счёт. Измените остаток после оплаты или истечения счёта.")
             await connection.execute("DELETE FROM stock_items WHERE product_id=$1 AND NOT is_issued", product_id)
             if items:
                 await connection.executemany("INSERT INTO stock_items(product_id, payload) VALUES($1,$2)", [(product_id, item) for item in items if item.strip()])

@@ -5,11 +5,11 @@ import html
 import logging
 import os
 import secrets
-import hashlib
-import hmac
 import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import urlencode
+from contextlib import suppress
 
 from aiohttp import ClientSession, web
 import asyncpg
@@ -35,6 +35,8 @@ from shop_emoji import DEFAULT_EMOJI, EMOJI_FALLBACKS, EMOJI_LABELS
 from emoji_library import EmojiLibrary, validate_emoji_id
 from rich_description import description_to_html
 from exchange_rates import ExchangeRates
+from crypto_pay import CryptoPay, PaymentError, money, quantity, valid_signature
+from payments import Payments
 
 exchange_rates = ExchangeRates()
 
@@ -43,6 +45,7 @@ emoji_library = EmojiLibrary(Path(__file__).resolve().parent / "catalog/emojis.j
 router = Router()
 database: Database | None = None
 telegram_bot: Bot | None = None
+payments: Payments | None = None
 admin_sessions: set[str] = set()
 
 
@@ -50,6 +53,12 @@ def get_database() -> Database:
     if not database:
         raise RuntimeError("PostgreSQL не подключён")
     return database
+
+
+def get_payments() -> Payments:
+    if payments is None:
+        raise RuntimeError("Платежи ещё не подключены")
+    return payments
 
 
 class WalletState(StatesGroup):
@@ -99,10 +108,27 @@ async def payment_summary(amount: str) -> str:
     if quote is None:
         return usd_line + "\n<i>Эквивалент в рублях временно недоступен. Счёт в USD.</i>"
     rubles = f"{quote.rubles(amount):,.2f}".replace(",", " ").replace(".", ",")
-    date_label = ".".join(reversed(quote.effective_date.split("-")))
-    note = " · обновление курса временно недоступно" if quote.stale else ""
-    return (usd_line + f"\nВ рублях: ≈ <b>{rubles} ₽</b>\n"
-            f"<i>Курс ЦБ на {date_label}{note}. Эквивалент справочный, счёт в USD.</i>")
+    return usd_line + f"\nВ рублях: ≈ <b>{rubles} ₽</b>"
+
+
+async def admin_payment_url(amount, context: str) -> str:
+    quote = await exchange_rates.quote()
+    rub = f" / ≈ {quote.rubles(str(amount)):.2f} ₽" if quote else ""
+    text = f"Здравствуйте! {context}. Сумма: {amount:.2f} USD{rub}. Подскажите, как оплатить."
+    return "https://t.me/Ditzzmback?" + urlencode({"text": text})
+
+
+def payment_keyboard(payment=None, *, admin_url="https://t.me/Ditzzmback", retry="wallet", balance=False) -> InlineKeyboardMarkup:
+    rows = []
+    if payment and payment['status'] == 'pending' and payment['pay_url']:
+        rows.append([premium_link_button("Оплатить через Crypto Bot", payment['pay_url'], EMOJI['crypto'], style="success")])
+        rows.append([premium_button("Проверить оплату", f"check_payment:{payment['id']}", EMOJI['card'], style="success")])
+        if balance:
+            rows.append([premium_button("Оплатить с баланса", f"pay_balance:{payment['id']}", EMOJI['wallet'], style="success")])
+    else:
+        rows.append([premium_button("Оплата через Crypto Bot", retry, EMOJI['crypto'], style="success")])
+    rows.append([premium_link_button("Оплата через администратора", admin_url, EMOJI['admin_payment'], style="success")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def menu_keyboard() -> InlineKeyboardMarkup:
@@ -151,12 +177,6 @@ def support_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def payment_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [premium_link_button("Crypto Bot", "https://t.me/DitzzmBack", EMOJI["crypto"])],
-        [premium_link_button("Оплата через администратора", "https://t.me/DitzzmBack", EMOJI["admin_payment"])],
-        [premium_button("В меню", "menu", EMOJI["back"], style="danger")],
-    ])
 
 
 def shop_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
@@ -392,80 +412,125 @@ async def open_catalog(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
+def private_checkout(callback: CallbackQuery) -> bool:
+    return bool(callback.message and callback.message.chat.type == "private" and callback.message.chat.id == callback.from_user.id)
+
+
 @router.callback_query(F.data.startswith("product:"))
+@router.callback_query(F.data.startswith("qty:"))
 async def open_product(callback: CallbackQuery) -> None:
-    product_id = int(callback.data.split(":", 1)[1])
+    if not private_checkout(callback):
+        await callback.answer("Откройте магазин в личном чате с ботом.", show_alert=True)
+        return
+    try:
+        parts = callback.data.split(":")
+        product_id = int(parts[1])
+        count = quantity(parts[2]) if len(parts) > 2 else 1
+    except (ValueError, IndexError):
+        await callback.answer("Некорректное количество.", show_alert=True)
+        return
     product = await get_database().product(product_id)
-    if not product or not product["is_active"]:
+    if not product or not product['is_active']:
         await callback.answer("Товар недоступен", show_alert=True)
         return
-    stock = await get_database().stock(product_id)
-    available = sum(not item["is_issued"] for item in stock)
     await callback.answer()
-    await callback.message.answer(
-        product_card(product, available),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            *([[premium_button("Купить через Crypto Pay", f"buy:{product_id}", EMOJI["crypto"], style="success")]] if available else []),
-            [premium_button(
-                "Назад к категории" if product["category_id"] else "Назад в каталог",
-                f"category:{product['category_id']}" if product["category_id"] else "catalog",
-                EMOJI["back"],
-                style="danger",
-            )],
-        ]),
-    )
+    await render_product(callback, product, count)
 
 
-async def create_crypto_invoice(order: dict) -> dict:
-    """Creates a fiat USD Crypto Pay invoice; the API token never reaches a client."""
-    request_data = {
-        "currency_type": "fiat",
-        "fiat": "USD",
-        "accepted_assets": "USDT,TON",
-        "amount": order["price"],
-        "description": order["name"][:1024],
-        "payload": str(order["id"]),
-        "expires_in": 3600,
-    }
-    async with ClientSession() as session:
-        async with session.post(
-            "https://pay.crypt.bot/api/createInvoice",
-            json=request_data,
-            headers={"Crypto-Pay-API-Token": settings.crypto_pay_token},
-            timeout=20,
-        ) as response:
-            response_data = await response.json(content_type=None)
-    if not response.ok or not response_data.get("ok"):
-        raise RuntimeError(response_data.get("error", {}).get("name", "Crypto Pay не создал счёт"))
-    return response_data["result"]
+async def render_product(callback: CallbackQuery, product: dict, count: int) -> None:
+    # Serialize the complete edit, not just createInvoice: fast quantity taps must not
+    # overwrite a newer card with an older invoice link that has already been deleted.
+    async with get_payments().lock(callback.from_user.id, 'card', product['id']):
+        await _render_product(callback, product, count)
+
+
+async def _render_product(callback: CallbackQuery, product: dict, count: int) -> None:
+    user = callback.from_user
+    await get_database().upsert_customer(user.id, user.username, user.first_name)
+    service = get_payments()
+    available = await service.store.available(product['id'], user.id)
+    count = min(count, max(1, available), 100)
+    payment = None
+    error = ""
+    if available:
+        try:
+            payment = await service.checkout(user.id, 'product', product_id=product['id'], count=count)
+            if payment['status'] == 'paid':
+                await service.deliver(payment['id'])
+                await callback.message.answer("Этот счёт уже оплачен. Товар отправлен отдельным сообщением.")
+                return
+        except (ValueError, PaymentError) as exc:
+            error = f"\n\n{html.escape(str(exc))}"
+    total = payment['amount'] if payment else Decimal(str(product['price'])) * count
+    # Invoice snapshots remain valid if the admin changes a price while it is open.
+    displayed = dict(product)
+    if payment:
+        displayed['price'] = payment['amount'] / count
+        displayed['name'] = payment['product_name']
+    text = product_card(displayed, available)
+    rows = []
+    if available:
+        text += f"\n\nКоличество: <b>{count} шт.</b>\n{await payment_summary(str(total))}" + error
+        rows.append([
+            button("−", f"qty:{product['id']}:{max(1, count - 1)}", style="success"),
+            button(f"{count} шт.", "quantity_info", style="success"),
+            button("+", f"qty:{product['id']}:{min(available, 100, count + 1)}", style="success"),
+        ])
+        admin_url = await admin_payment_url(total, f"Хочу купить {displayed['name']} × {count} шт.")
+        rows += payment_keyboard(payment, admin_url=admin_url, retry=f"qty:{product['id']}:{count}", balance=True).inline_keyboard
+        if payment:
+            text += "\n\n<i>Счёт действителен 10 минут. Для другого способа оплаты используйте только одну кнопку.</i>"
+    rows.append([premium_button("Назад к категории" if product['category_id'] else "Назад в каталог",
+        f"category:{product['category_id']}" if product['category_id'] else "catalog", EMOJI['back'], style="danger")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+    if callback.data.startswith('qty:'):
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except TelegramBadRequest as exc:
+            if 'message is not modified' not in str(exc):
+                raise
+    else:
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "quantity_info")
+async def quantity_info(callback: CallbackQuery):
+    await callback.answer("Выберите количество кнопками − и +.")
 
 
 @router.callback_query(F.data.startswith("buy:"))
 async def buy_product(callback: CallbackQuery) -> None:
-    if not settings.crypto_pay_token:
-        await callback.answer("Оплата временно не настроена", show_alert=True)
+    # Old shop messages should still open the new quantity/payment card.
+    await open_product(callback)
+
+
+@router.callback_query(F.data.startswith("check_payment:"))
+async def check_payment(callback: CallbackQuery):
+    if not private_checkout(callback):
+        await callback.answer("Проверяйте оплату в личном чате с ботом.", show_alert=True)
         return
+    await callback.answer("Проверяем оплату…")
     try:
-        product_id = int(callback.data.split(":", maxsplit=1)[1])
-        user = callback.from_user
-        await get_database().upsert_customer(user.id, user.username, user.first_name)
-        order = await get_database().create_crypto_order(user.id, product_id)
-        invoice = await create_crypto_invoice(order)
-        await get_database().set_crypto_invoice(order["id"], int(invoice["invoice_id"]))
-    except (ValueError, RuntimeError, KeyError) as exc:
-        if "order" in locals():
-            await get_database().cancel_order(order["id"])
-        logging.exception("Unable to create Crypto Pay invoice")
-        await callback.answer(f"Не удалось создать счёт: {exc}", show_alert=True)
+        p = await get_payments().check(int(callback.data.split(":")[1]), callback.from_user.id)
+        text = ("Оплата подтверждена ✅" if p['status'] == 'paid' else
+                "Срок счёта истёк. Откройте товар или пополнение заново." if p['status'] == 'expired' else
+                "Счёт пока не оплачен. После оплаты подтверждение придёт автоматически.")
+        await callback.message.answer(text)
+    except (ValueError, PaymentError) as exc:
+        await callback.message.answer(html.escape(str(exc)))
+
+
+@router.callback_query(F.data.startswith("pay_balance:"))
+async def pay_balance(callback: CallbackQuery):
+    if not private_checkout(callback):
+        await callback.answer("Оплачивайте в личном чате с ботом.", show_alert=True)
         return
-    await callback.answer()
-    await callback.message.answer(
-        f"<b>{html.escape(order['name'])}</b>\n{await payment_summary(order['price'])}\n\n"
-        "После подтверждения оплаты товар будет выдан автоматически.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            premium_link_button("Оплатить через Crypto Pay", invoice["pay_url"], EMOJI["crypto"])
-        ]]),
-    )
+    await callback.answer("Проверяем баланс…")
+    try:
+        await get_payments().balance_purchase(int(callback.data.split(":")[1]), callback.from_user.id)
+        await callback.message.answer("Покупка подтверждена ✅ Товар придёт отдельным сообщением.")
+    except (ValueError, PaymentError) as exc:
+        await callback.message.answer(html.escape(str(exc)))
 
 
 @router.callback_query(F.data.in_(SCREENS.keys()))
@@ -485,22 +550,59 @@ async def open_category(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("wallet_amount:"))
 async def choose_wallet_amount(callback: CallbackQuery) -> None:
+    if not private_checkout(callback):
+        await callback.answer("Откройте кошелёк в личном чате с ботом.", show_alert=True)
+        return
     amount = callback.data.split(":", maxsplit=1)[1]
     await callback.answer("Сумма выбрана")
-    await show_payment_options(callback.message, amount)
+    try:
+        await show_payment_options(callback.message, amount, callback.from_user)
+    except ValueError as exc:
+        await callback.message.answer(html.escape(str(exc)))
 
 
-async def show_payment_options(message: Message, amount: str) -> None:
-    await message.delete()
-    await message.answer(
-        f"<b>Пополнение</b>\n{await payment_summary(amount)}\n\n"
-        f"Выберите способ оплаты {premium_emoji(EMOJI['card'], '💳')}",
-        reply_markup=payment_keyboard(),
-    )
+async def show_payment_options(message: Message, amount: str, user=None, *, replace=True) -> None:
+    amount = money(amount, maximum=Decimal('10000'))
+    payment = None
+    error = ""
+    if user is not None:
+        await get_database().upsert_customer(user.id, user.username, user.first_name)
+        try:
+            payment = await get_payments().checkout(user.id, 'topup', amount=amount)
+            if payment['status'] == 'paid':
+                await get_payments().deliver(payment['id'])
+                await message.answer("Этот счёт уже оплачен, баланс пополнен.")
+                return
+        except (ValueError, PaymentError) as exc:
+            error = "\n\n" + html.escape(str(exc))
+    keyboard = payment_keyboard(payment,
+        admin_url=await admin_payment_url(amount, "Хочу пополнить баланс магазина"), retry=f"topup:{amount:.2f}")
+    keyboard.inline_keyboard.append([premium_button("Назад в кошелёк", "wallet", EMOJI['back'], style="danger")])
+    if replace:
+        with suppress(TelegramBadRequest):
+            await message.delete()
+    await message.answer(f"<b>Пополнение</b>\n{await payment_summary(str(amount))}\n\n"
+        "Выберите способ оплаты. Через Crypto Bot баланс пополнится автоматически; через администратора — после его подтверждения." + error,
+        reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("topup:"))
+async def create_topup(callback: CallbackQuery):
+    if not private_checkout(callback):
+        await callback.answer("Откройте кошелёк в личном чате с ботом.", show_alert=True)
+        return
+    await callback.answer()
+    try:
+        await show_payment_options(callback.message, callback.data.split(":")[1], callback.from_user)
+    except ValueError as exc:
+        await callback.message.answer(html.escape(str(exc)))
 
 
 @router.callback_query(F.data == "wallet_custom")
 async def request_custom_amount(callback: CallbackQuery, state: FSMContext) -> None:
+    if not private_checkout(callback):
+        await callback.answer("Откройте кошелёк в личном чате с ботом.", show_alert=True)
+        return
     await state.set_state(WalletState.waiting_for_amount)
     await callback.answer()
     await callback.message.answer("Введите сумму в долларах, например: <b>7.50</b>")
@@ -510,14 +612,12 @@ async def request_custom_amount(callback: CallbackQuery, state: FSMContext) -> N
 async def receive_custom_amount(message: Message, state: FSMContext) -> None:
     raw_amount = message.text.strip().replace(",", ".").replace("$", "")
     try:
-        amount = float(raw_amount)
-        if not 0 < amount <= 10_000:
-            raise ValueError
+        amount = money(raw_amount, maximum=Decimal("10000"))
     except ValueError:
         await message.answer(f"Введите сумму числом от {dollars('0.01')} до {dollars('10 000')}.")
         return
     await state.clear()
-    await show_payment_options(message, f"{amount:.2f}")
+    await show_payment_options(message, f"{amount:.2f}", message.from_user, replace=False)
 
 
 @router.callback_query(F.data == "link_not_set")
@@ -532,19 +632,25 @@ async def main() -> None:
         raise RuntimeError("Укажите DATABASE_URL PostgreSQL в .env")
     if not settings.admin_secret or settings.admin_secret.startswith("change-this"):
         raise RuntimeError("Укажите надёжный ADMIN_SECRET в .env")
-    global database, telegram_bot
+    global database, telegram_bot, payments
     database = Database(settings.database_url)
     await database.connect()
     apply_emoji_settings(await database.emoji_settings())
     bot = Bot(token=settings.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     telegram_bot = bot
+    payments = Payments(database._pool(), CryptoPay(settings.crypto_pay_token, testnet=settings.crypto_pay_testnet), bot)
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     health_runner = await start_health_server()
+    worker = asyncio.create_task(payments.run(), name="payment-reconciliation")
     try:
         await dispatcher.start_polling(bot)
     finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
         await health_runner.cleanup()
+        await payments.client.close()
         await database.close()
 
 
@@ -745,43 +851,30 @@ async def admin_orders(request: web.Request) -> web.Response:
 
 
 async def crypto_webhook(request: web.Request) -> web.Response:
-    """Receives signed `invoice_paid` updates from Crypto Pay and delivers once."""
-    if not settings.crypto_pay_webhook_secret or not secrets.compare_digest(
-        request.match_info["secret"], settings.crypto_pay_webhook_secret
-    ):
+    if not settings.crypto_pay_webhook_secret or not secrets.compare_digest(request.match_info["secret"], settings.crypto_pay_webhook_secret):
         raise web.HTTPNotFound()
-    raw_body = await request.read()
-    signature = request.headers.get("crypto-pay-api-signature", "")
-    signature_key = hashlib.sha256(settings.crypto_pay_token.encode()).digest()
-    expected_signature = hmac.new(signature_key, raw_body, hashlib.sha256).hexdigest()
-    if not signature or not hmac.compare_digest(signature, expected_signature):
-        logging.warning("Rejected Crypto Pay webhook with an invalid signature")
+    raw = await request.read()
+    if not valid_signature(settings.crypto_pay_token, raw, request.headers.get("crypto-pay-api-signature", "")):
         raise web.HTTPUnauthorized()
     try:
-        update = json.loads(raw_body)
-        invoice = update.get("payload", {})
-        if update.get("update_type") != "invoice_paid" or invoice.get("status") != "paid":
-            return web.json_response({"ok": True})
-        delivery = await get_database().finalize_crypto_order(int(invoice["invoice_id"]))
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        logging.warning("Invalid Crypto Pay webhook payload: %s", exc)
-        raise web.HTTPBadRequest() from exc
-    if not delivery:
-        return web.json_response({"ok": True})
-    if not telegram_bot:
-        raise web.HTTPServiceUnavailable()
-    if delivery["out_of_stock"]:
-        await telegram_bot.send_message(
-            delivery["customer_id"],
-            "Оплата получена, но товар закончился. Напишите в поддержку для возврата.",
-        )
-    else:
-        await telegram_bot.send_message(
-            delivery["customer_id"],
-            f"<b>Оплата получена ✅</b>\n\n<b>{html.escape(delivery['product_name'])}</b>\n\n"
-            f"<code>{html.escape(delivery['payload'])}</code>",
-        )
-    return web.json_response({"ok": True})
+        update = json.loads(raw)
+        if not isinstance(update, dict):
+            raise ValueError
+        if update.get('update_type') != 'invoice_paid':
+            return web.json_response({'ok': True})
+        invoice = update.get('payload')
+        if not isinstance(invoice, dict) or invoice.get('status') != 'paid':
+            raise ValueError
+        if payments is None:
+            raise web.HTTPServiceUnavailable()
+        p = await payments.store.apply(invoice)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        raise web.HTTPBadRequest() from None
+    # Ledger commits first; delivery failures remain in a durable retry queue.
+    # Returning 200 on duplicates is safe because stock and balance settle only once.
+    if p:
+        await payments.deliver(p['id'])
+    return web.json_response({'ok': True})
 
 
 async def start_health_server() -> web.AppRunner:

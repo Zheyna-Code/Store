@@ -30,6 +30,7 @@ class Settings:
     database_url: str
     crypto_pay_token: str
     crypto_pay_webhook_secret: str
+    crypto_pay_testnet: bool = False
 
 
 settings = Settings(
@@ -41,6 +42,7 @@ settings = Settings(
     database_url=os.getenv("DATABASE_URL", ""),
     crypto_pay_token=os.getenv("CRYPTO_PAY_TOKEN", ""),
     crypto_pay_webhook_secret=os.getenv("CRYPTO_PAY_WEBHOOK_SECRET", ""),
+    crypto_pay_testnet=os.getenv("CRYPTO_PAY_TESTNET", "false").lower() in {"true", "1", "yes"},
 )
 
 COVERS_DIR = BASE_DIR / "brand-covers"

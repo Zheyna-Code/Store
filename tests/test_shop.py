@@ -1,3 +1,4 @@
+from decimal import Decimal
 import asyncio
 from io import BytesIO
 import json
@@ -72,19 +73,12 @@ class EmojiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(keyboard.inline_keyboard[0][0].icon_custom_emoji_id, DEFAULT_EMOJI['chatgpt'])
         self.assertEqual(keyboard.inline_keyboard[0][0].text, 'Test · $1.00')
     async def test_crypto_invoice_is_usd(self):
-        response = SimpleNamespace(ok=True,json=AsyncMock(return_value={'ok':True,'result':{'invoice_id':1}}))
-        class Context:
-            async def __aenter__(self): return response
-            async def __aexit__(self,*args): pass
-        captured = {}
-        class Session:
-            async def __aenter__(self): return self
-            async def __aexit__(self,*args): pass
-            def post(self,url,**kwargs): captured.update(kwargs); return Context()
-        with patch.object(bot,'ClientSession',Session):
-            await bot.create_crypto_invoice({'price':'1.00','name':'Test','id':4})
-        self.assertEqual(captured['json']['fiat'],'USD')
-        self.assertEqual(captured['json']['amount'],'1.00')
+        from crypto_pay import CryptoPay
+        client = CryptoPay('test')
+        client.request = AsyncMock(return_value={'invoice_id': 1})
+        await client.create(dict(amount=Decimal('1.00'), product_name='Test', quantity=1, purpose='product', payload='shop:test'))
+        self.assertEqual(client.request.call_args.args[1]['fiat'], 'USD')
+        self.assertEqual(client.request.call_args.args[1]['amount'], '1.00')
     async def test_library_thumbnails_and_cache(self):
         library = EmojiLibrary(Path('catalog/emojis.json')); tg = FakeTelegram()
         meta = await library.previews(tg,['123','999'])
