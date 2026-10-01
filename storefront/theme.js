@@ -20,3 +20,30 @@
     });
   });
 })();
+
+// 3D-наклон кнопки «Перейти в каталог» за курсором (только мышь/перо).
+(function () {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  document.addEventListener('DOMContentLoaded', function () {
+    var cta = document.querySelector('.cta');
+    if (!cta) return;
+    var MAX = 12;
+    cta.addEventListener('pointermove', function (e) {
+      if (e.pointerType === 'touch') return;
+      var r = cta.getBoundingClientRect();
+      var x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+      cta.classList.add('tilting');
+      cta.style.setProperty('--ry', ((x - 0.5) * 2 * MAX).toFixed(2) + 'deg');
+      cta.style.setProperty('--rx', ((0.5 - y) * 2 * MAX * 0.7).toFixed(2) + 'deg');
+      cta.style.setProperty('--mx', (x * 100).toFixed(1) + '%');
+      cta.style.setProperty('--my', (y * 100).toFixed(1) + '%');
+    });
+    cta.addEventListener('pointerleave', function () {
+      cta.classList.remove('tilting');
+      cta.style.setProperty('--rx', '0deg');
+      cta.style.setProperty('--ry', '0deg');
+      cta.style.setProperty('--mx', '50%');
+      cta.style.setProperty('--my', '50%');
+    });
+  });
+})();
