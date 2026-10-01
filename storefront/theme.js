@@ -47,3 +47,17 @@
     });
   });
 })();
+
+// Свет под курсором на маленьких кнопках шапки.
+(function () {
+  document.addEventListener('DOMContentLoaded', function () {
+    var buttons = document.querySelectorAll('.login, .tg, .theme');
+    Array.prototype.forEach.call(buttons, function (b) {
+      b.addEventListener('pointermove', function (e) {
+        var r = b.getBoundingClientRect();
+        b.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100).toFixed(1) + '%');
+        b.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100).toFixed(1) + '%');
+      });
+    });
+  });
+})();
