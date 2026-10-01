@@ -1,4 +1,4 @@
-@font-face{font-family:"Manrope";src:url("/storefront/manrope.woff2") format("woff2");font-weight:200 800;font-display:swap}
+@font-face{font-family:"Manrope";src:url("/storefront/manrope.woff2?v=faa87f06") format("woff2");font-weight:200 800;font-display:swap}
 /* Все размеры — пиксели референса 1672x941, умноженные на --u (масштаб «cover» фона). */
 :root{--u:max(calc(100vw / 1672),calc(100vh / 941));--c:var(--u);--h:min(calc(100vw / 1672),calc(100vh / 941));--ink:#0a0a0b;color-scheme:light}
 @supports(height:100svh){:root{--u:max(calc(100vw / 1672),calc(100svh / 941));--h:min(calc(100vw / 1672),calc(100svh / 941))}}
@@ -9,7 +9,7 @@ a{color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent}
 a:focus-visible{outline:3px solid #2783de;outline-offset:4px}
 .visually-hidden{position:absolute!important;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .hero{position:fixed;inset:0;overflow:hidden}
-.stage{position:absolute;left:50%;top:50%;width:calc(1672 * var(--u));height:calc(941 * var(--u));transform:translate(-50%,-50%);background:url("/storefront/hero.webp") center/100% 100% no-repeat}
+.stage{position:absolute;left:50%;top:50%;width:calc(1672 * var(--u));height:calc(941 * var(--u));transform:translate(-50%,-50%);background:url("/storefront/hero.webp?v=e752bbc5") center/100% 100% no-repeat}
 /* Шапка */
 .top{position:fixed;z-index:2;top:0;left:0;right:0;height:calc(104 * var(--h));display:flex;align-items:center;justify-content:space-between;padding:0 calc(101 * var(--h)) 0 calc(106 * var(--h))}
 .brand{font-size:calc(36.5 * var(--h));font-weight:800;letter-spacing:-.035em;line-height:1;white-space:nowrap}
