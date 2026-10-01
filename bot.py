@@ -29,6 +29,7 @@ from aiogram.types import (
     CopyTextButton,
     WebAppInfo,
     MenuButtonWebApp,
+    MenuButtonDefault,
     Message,
 )
 
@@ -141,13 +142,16 @@ def payment_keyboard(payment=None, *, admin_url="https://t.me/Ditzzmback", retry
 
 
 def menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [premium_button("Каталог", "catalog", EMOJI["catalog"], style="success"), premium_button("Кошелёк", "wallet", EMOJI["wallet"])],
         [premium_button("Бонус", "bonus", EMOJI["bonus"]), premium_button("Профиль", "profile", EMOJI["profile"])],
         [premium_button("Техподдержка", "support", EMOJI["support"])],
         [premium_button("Прочее", "other", EMOJI["other"])],
-        [InlineKeyboardButton(text="Открыть Web App", web_app=WebAppInfo(url=settings.shop_url), icon_custom_emoji_id=EMOJI["catalog"], style="success")],
-    ])
+    ]
+    # Web App временно скрыт (WEB_APP_ENABLED=false), вернём после запуска сайта.
+    if settings.web_app_enabled:
+        rows.append([InlineKeyboardButton(text="Открыть Web App", web_app=WebAppInfo(url=settings.shop_url), icon_custom_emoji_id=EMOJI["catalog"], style="success")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def back_keyboard(destination: str = "menu") -> InlineKeyboardMarkup:
@@ -761,9 +765,14 @@ async def main() -> None:
     health_runner = await start_health_server()
     await quantity_emoji.load(bot)
     try:
-        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Магазин", web_app=WebAppInfo(url=settings.shop_url)),request_timeout=5)
+        if settings.web_app_enabled:
+            menu_button = MenuButtonWebApp(text="Магазин", web_app=WebAppInfo(url=settings.shop_url))
+        else:
+            # Убираем ранее установленную кнопку Mini App у поля ввода.
+            menu_button = MenuButtonDefault()
+        await bot.set_chat_menu_button(menu_button=menu_button, request_timeout=5)
     except Exception:
-        logging.warning("Telegram menu button was not configured; Web App link remains in shop menu")
+        logging.warning("Telegram menu button was not configured")
     worker = asyncio.create_task(payments.run(), name="payment-reconciliation")
     try:
         await dispatcher.start_polling(bot)

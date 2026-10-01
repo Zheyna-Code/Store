@@ -27,7 +27,7 @@
   async function busy(button,fn) { if(button?.disabled)return;if(button)button.disabled=true;try{return await fn();}catch(error){toast(error.message);}finally{if(button?.isConnected)button.disabled=false;} }
   function heading(title,label='ТВОЙ МАГАЗИН',subtitle='') { return `<div class="section-heading"><div><span class="eyebrow">${e(label)}</span><h2>${e(title)}</h2></div>${subtitle?`<p class="muted">${e(subtitle)}</p>`:''}</div>`; }
   function authGate(title) { return heading(title)+`<div class="empty-state"><img class="loading-mark" src="/storefront/icon.svg" width="32" height="32" alt=""><h3>Твой магазин — с тобой</h3><p>Войди через Telegram, чтобы увидеть баланс, бонусы и свои покупки. Пароль не нужен.</p><button class="btn btn-bright login-trigger">Войти через Telegram ↗</button></div>`; }
-  function header() { $('#account').textContent=state.user ? `${state.user.name || 'Профиль'} · ${usd(state.user.balance)}` : 'Войти через Telegram ↗'; }
+  function header() { $('#account').textContent=state.user ? `${state.user.name || 'Профиль'} · ${usd(state.user.balance)}` : 'Войти'; }
   async function refreshMe() { state.user=await api('me');state.csrf=state.user.csrf;header(); }
   async function login() {
     if(tg?.initData){await busy(null,async()=>{const d=await api('auth/telegram','POST',{initData:tg.initData});state.bearer=d.session;state.csrf=d.csrf;await refreshMe();await view(state.view);toast('Вход выполнен');});return;}
@@ -53,6 +53,7 @@
     try{await refreshMe();}catch{state.user=null;header();el.innerHTML=authGate('Войди заново');return;}
     if(name==='wallet')wallet();else if(name==='bonus')bonus();else await orders();
   }
+  const markScrolled=()=>document.body.classList.toggle('scrolled',(window.scrollY||0)>24);document.addEventListener('scroll',markScrolled,{passive:true});
   $('.brand').onclick=event=>{event.preventDefault();closeModal();view('catalog');window.scrollTo({top:0,behavior:'smooth'});};
   $('.hero-button').onclick=event=>{event.preventDefault();view('catalog');$('#catalog').scrollIntoView({behavior:'smooth'});};
   document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{closeModal();view(button.dataset.view);window.scrollTo({top:0,behavior:'smooth'});});
