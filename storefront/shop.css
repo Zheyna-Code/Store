@@ -16,7 +16,7 @@ a:focus-visible{outline:3px solid #2783de;outline-offset:4px}
 .actions{display:flex;align-items:center}
 .tg{width:calc(48 * var(--h));height:calc(48 * var(--h));border-radius:50%;display:grid;place-items:center;color:#111;background:linear-gradient(180deg,#f3f4f5,#e1e3e6);box-shadow:inset 0 1px 0 #fff,0 calc(2 * var(--h)) calc(8 * var(--h)) #0000001f;transition:transform .2s}
 .tg svg{width:46%;height:46%;transform:translateX(-5%)}
-.tg:hover{transform:translateY(-1px)}
+.tg:hover,.theme:hover{transform:translateY(-1px)}
 .divider{width:1px;height:calc(26 * var(--h));background:#00000066;margin:0 calc(28 * var(--h)) 0 calc(28 * var(--h))}
 .login{height:calc(48 * var(--h));width:calc(112 * var(--h));border-radius:999px;display:grid;place-items:center;background:#0d0d0e;color:#fff;font-size:calc(16.5 * var(--h));font-weight:600;box-shadow:inset 0 1px 0 #ffffff26,0 calc(6 * var(--h)) calc(16 * var(--h)) #0000002e;transition:background .2s}
 .login:hover{background:#262628}
@@ -33,4 +33,25 @@ a:focus-visible{outline:3px solid #2783de;outline-offset:4px}
 .cta:hover{filter:brightness(1.18)}
 /* Телефоны и узкие экраны: фон остаётся «cover», текст масштабируется по ширине */
 @media (max-aspect-ratio:1/1){:root{--c:min(calc(100vw / 990),calc(100vh / 760));--h:calc(100vw / 760)}.top{height:calc(130 * var(--h));padding:0 calc(36 * var(--h))}.brand{font-size:calc(44 * var(--h))}.tg,.login{height:calc(78 * var(--h))}.tg{width:calc(78 * var(--h))}.login{width:calc(170 * var(--h));font-size:calc(27 * var(--h))}.divider{height:calc(38 * var(--h));margin:0 calc(24 * var(--h))}.cta{width:calc(430 * var(--c));height:calc(100 * var(--c));font-size:calc(26 * var(--c))}.cta svg{width:calc(30 * var(--c));height:calc(30 * var(--c))}}
+/* Переключатель темы */
+.theme{width:calc(48 * var(--h));height:calc(48 * var(--h));margin-right:calc(14 * var(--h));padding:0;border:0;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:#111;background:linear-gradient(180deg,#f3f4f5,#e1e3e6);box-shadow:inset 0 1px 0 #fff,0 calc(2 * var(--h)) calc(8 * var(--h)) #0000001f;transition:transform .2s,background .3s,color .3s}
+.theme svg{width:46%;height:46%}
+.theme .sun{display:none}
+html[data-theme=dark] .theme .sun{display:block}
+html[data-theme=dark] .theme .moon{display:none}
+.theme:focus-visible{outline:3px solid #2783de;outline-offset:4px}
+/* Тёмная тема */
+.stage,.brand,.title,.ticker li,.divider,.login,.tg,.cta{transition:color .35s,background-color .35s,box-shadow .35s,text-shadow .35s}
+html[data-theme=dark]{--ink:#f5f5f7;color-scheme:dark}
+html[data-theme=dark],html[data-theme=dark] body{background:#050506}
+html[data-theme=dark] .stage{background-image:url("/storefront/hero-dark.webp?v=8a8876e3")}
+html[data-theme=dark] .title,html[data-theme=dark] .ticker li{text-shadow:0 0 calc(26 * var(--c)) #000000d9,0 0 calc(3 * var(--c)) #00000099}
+html[data-theme=dark] .tg,html[data-theme=dark] .theme{color:#f5f5f7;background:linear-gradient(180deg,#2c2d30,#151618);box-shadow:inset 0 1px 0 #ffffff24,0 calc(2 * var(--h)) calc(8 * var(--h)) #00000080}
+html[data-theme=dark] .divider{background:#ffffff66}
+html[data-theme=dark] .login{background:#f5f5f7;color:#0a0a0b;box-shadow:inset 0 -1px 0 #0000001a,0 calc(6 * var(--h)) calc(16 * var(--h)) #00000080}
+html[data-theme=dark] .login:hover{background:#fff}
+html[data-theme=dark] .cta{color:#0a0a0b;background:linear-gradient(180deg,#ffffff 0%,#e4e6e9 48%,#b9bdc2 100%);box-shadow:0 0 0 calc(2 * var(--c)) #2a2b2e,0 0 0 calc(3.5 * var(--c)) #ffffff40,inset 0 1px 0 #fff,inset 0 calc(-10 * var(--c)) calc(18 * var(--c)) #0000002e,0 calc(18 * var(--c)) calc(44 * var(--c)) #000000a6}
+html[data-theme=dark] .cta::after{background:radial-gradient(ellipse at 50% 100%,#ffffffcc,#ffffff33 45%,transparent 72%)}
+html[data-theme=dark] .cta:hover{filter:brightness(1.06)}
+@media (max-aspect-ratio:1/1){.theme{width:calc(78 * var(--h));height:calc(78 * var(--h));margin-right:calc(16 * var(--h))}}
 @media(prefers-reduced-motion:reduce){.ticker ul{animation:none}}
