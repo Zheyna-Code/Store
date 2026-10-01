@@ -176,7 +176,8 @@ class Payments:
     async def reconcile(self):
         pending = await self.store.pending()
         ids = [p['invoice_id'] for p in pending if p['invoice_id']]
-        ids += [r['provider_invoice_id'] for r in await self.store.legacy_pending()]
+        legacy_ids = {r['provider_invoice_id'] for r in await self.store.legacy_pending()}
+        ids += list(legacy_ids)
         invoices = await self.client.invoices(list(dict.fromkeys(ids))) if ids else []
         unbound = {p['payload']: p for p in pending if not p['invoice_id']}
         if unbound:
@@ -190,7 +191,10 @@ class Payments:
             try:
                 await self.store.apply(invoice)
             except ValueError:
-                logging.warning('Crypto Pay invoice validation failed: id=%s', invoice.get('invoice_id'))
+                if invoice.get('invoice_id') in legacy_ids:
+                    await self.close_legacy(invoice)
+                else:
+                    logging.warning('Crypto Pay invoice validation failed: id=%s', invoice.get('invoice_id'))
         if pending:
             await self.store.pool.execute('UPDATE payments SET last_checked_at=NOW() WHERE id=ANY($1::bigint[])', [p['id'] for p in pending])
         # Free reservations only after an authoritative expired result. Unbound ambiguous
@@ -200,6 +204,20 @@ class Payments:
                 expired = await self.store.pool.fetchval('SELECT expires_at<=NOW() FROM payments WHERE id=$1', p['id'])
                 if expired:
                     await self.store.release(p['id'])
+
+    async def close_legacy(self, invoice: dict):
+        """Old RUB invoices from the first bot version never match the USD checks.
+        Close them so they stop being polled every 30 seconds; paid ones go to manual review."""
+        status = invoice.get('status')
+        if status == 'active':
+            return
+        new_status = 'needs_review' if status == 'paid' else 'expired'
+        await self.store.pool.execute("UPDATE orders SET status=$1 WHERE provider='crypto_pay' AND status='pending' AND provider_invoice_id=$2",
+                                      new_status, invoice.get('invoice_id'))
+        if new_status == 'needs_review':
+            logging.warning('Old Crypto Pay invoice was paid, check the order manually: id=%s', invoice.get('invoice_id'))
+        else:
+            logging.info('Old Crypto Pay invoice closed: id=%s', invoice.get('invoice_id'))
 
     async def run(self):
         while True:

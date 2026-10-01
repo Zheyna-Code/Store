@@ -363,6 +363,18 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM payments'),1)
         self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM stock_items WHERE is_issued'),1)
 
+    async def test_legacy_rub_invoice_is_closed_instead_of_polled_forever(self):
+        expired=await self.pool.fetchval("INSERT INTO orders(customer_id,product_id,amount,status,provider,provider_invoice_id) VALUES(10,$1,250,'pending','crypto_pay',65527159) RETURNING id",self.pid)
+        paid=await self.pool.fetchval("INSERT INTO orders(customer_id,product_id,amount,status,provider,provider_invoice_id) VALUES(10,$1,250,'pending','crypto_pay',65527160) RETURNING id",self.pid)
+        self.api.data[65527159]=dict(invoice_id=65527159,currency_type='fiat',fiat='RUB',amount='250',payload=str(expired),status='expired')
+        self.api.data[65527160]=dict(invoice_id=65527160,currency_type='fiat',fiat='RUB',amount='250',payload=str(paid),status='paid')
+        await self.service.reconcile()
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM orders WHERE id=$1',expired),'expired')
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM orders WHERE id=$1',paid),'needs_review')
+        self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM payments'),0)
+        self.assertEqual(await self.pool.fetchval('SELECT COUNT(*) FROM stock_items WHERE is_issued'),0)
+        self.assertEqual(await self.store.legacy_pending(),[])
+
     async def test_signed_webhook_replay_and_invalid_requests(self):
         p=await self.service.checkout(10,'topup',amount=Decimal('3.30'))
         app=web.Application(); app.router.add_post('/crypto/{secret}',bot.crypto_webhook)
