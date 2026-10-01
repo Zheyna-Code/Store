@@ -1,6 +1,10 @@
 build:
   system: auto
   command: "pip install -r requirements.txt"
+  min_cpu: 0.5
+  max_cpu: 1
+  min_memory: 512
+  max_memory: 1024
 
 start_command: "python bot.py"
 
