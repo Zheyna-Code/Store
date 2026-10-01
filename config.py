@@ -32,6 +32,8 @@ class Settings:
     crypto_pay_webhook_secret: str
     crypto_pay_testnet: bool = False
     shop_url: str = "https://nexora.hostless.app/"
+    # Telegram Mini App временно выключен, пока делается сайт. Вернуть: WEB_APP_ENABLED=true
+    web_app_enabled: bool = False
 
 
 settings = Settings(
@@ -45,6 +47,7 @@ settings = Settings(
     crypto_pay_webhook_secret=os.getenv("CRYPTO_PAY_WEBHOOK_SECRET", ""),
     crypto_pay_testnet=os.getenv("CRYPTO_PAY_TESTNET", "false").lower() in {"true", "1", "yes"},
     shop_url=os.getenv("SHOP_URL", "https://nexora.hostless.app/"),
+    web_app_enabled=os.getenv("WEB_APP_ENABLED", "false").lower() in {"true", "1", "yes"},
 )
 
 COVERS_DIR = BASE_DIR / "brand-covers"

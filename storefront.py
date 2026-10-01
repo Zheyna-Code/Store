@@ -1,4 +1,5 @@
 """Public shop, same-origin authenticated API and existing payment service integration."""
+import base64
 import functools
 import hmac
 import json
@@ -19,6 +20,14 @@ SESSION_COOKIE='__Host-nexus_session'
 LOGIN_COOKIE='__Host-nexus_login'
 FILES=Path(__file__).resolve().parent/'storefront'
 CSP="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+
+# Картинки и шрифт хранятся в репозитории как base64 (*.b64) и отдаются в бинарном виде.
+BINARY_ASSETS={'hero.webp':'image/webp','manrope.woff2':'font/woff2'}
+
+
+@functools.lru_cache(maxsize=None)
+def binary_asset(name):
+    return base64.b64decode((FILES/(name+'.b64')).read_text())
 
 
 def api(fn):
@@ -88,6 +97,9 @@ class ShopSite:
 
     async def asset(self,request):
         name=request.match_info['name']
+        if name in BINARY_ASSETS:
+            return web.Response(body=binary_asset(name),content_type=BINARY_ASSETS[name],
+                headers={'Cache-Control':'public, max-age=86400','X-Content-Type-Options':'nosniff'})
         if name not in {'shop.css','shop.js','icon.svg'}:raise web.HTTPNotFound()
         return web.FileResponse(FILES/name,headers={'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'})
 

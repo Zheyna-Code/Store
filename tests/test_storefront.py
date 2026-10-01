@@ -1,6 +1,7 @@
 """Public storefront, owner-only API and browser/Mini App authentication.
 No production tokens, payments or stock. DB tests create a disposable schema.
 """
+import dataclasses
 import asyncio
 import hashlib
 import hmac
@@ -69,7 +70,7 @@ class StoreApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_index_and_assets_security(self):
         r=await self.client.get('/');self.assertEqual(r.status,200)
         html=await r.text();self.assertIn('Nexus Store',html);self.assertNotIn('/store-media/',html);self.assertNotIn('brand-covers',html);self.assertIn('frame-ancestors',r.headers['Content-Security-Policy'])
-        for path in ['/storefront/shop.js','/storefront/shop.css','/storefront/icon.svg']:
+        for path in ['/storefront/shop.js','/storefront/shop.css','/storefront/icon.svg','/storefront/hero.webp','/storefront/manrope.woff2']:
             r=await self.client.get(path);self.assertEqual(r.status,200)
         self.assertEqual((await self.client.get('/storefront/bot.py')).status,404)
         self.assertEqual((await self.client.get('/store-media/../bot.py')).status,404)
@@ -164,8 +165,12 @@ class StoreApiTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(15):r,_=await self.request('auth/link',{})
         r,_=await self.request('auth/link',{});self.assertEqual(r.status,429)
     async def test_web_menu_button_and_bot_approval(self):
-        kb=bot.menu_keyboard();buttons=[b for row in kb.inline_keyboard for b in row]
-        self.assertTrue(any(b.web_app and b.web_app.url==ORIGIN+'/' for b in buttons))
+        with patch.object(bot,'settings',dataclasses.replace(bot.settings,web_app_enabled=False)):
+            kb=bot.menu_keyboard();buttons=[b for row in kb.inline_keyboard for b in row]
+            self.assertFalse(any(b.web_app for b in buttons))
+        with patch.object(bot,'settings',dataclasses.replace(bot.settings,web_app_enabled=True)):
+            kb=bot.menu_keyboard();buttons=[b for row in kb.inline_keyboard for b in row]
+            self.assertTrue(any(b.web_app and b.web_app.url==ORIGIN+'/' for b in buttons))
         _,lid,_=await self.site.auth.create_login();await self.site.auth.claim(lid,10)
         cb=SimpleNamespace(data='weblogin:allow:'+lid,from_user=SimpleNamespace(id=20),answer=AsyncMock(),message=SimpleNamespace(chat=SimpleNamespace(type='private',id=20),edit_text=AsyncMock()))
         with patch.object(bot,'shop_site',self.site):await bot.approve_web_login(cb)
