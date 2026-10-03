@@ -80,6 +80,6 @@ html[data-theme=dark] .cta::after{background:radial-gradient(circle calc(120 * v
 html[data-theme=dark] .login::after,html[data-theme=dark] .tg::after,html[data-theme=dark] .theme::after{background:radial-gradient(circle calc(60 * var(--h)) at var(--mx) var(--my),#fff,#ffffff40 50%,transparent 75%)}
 .cta:hover::after,.login:hover::after,.tg:hover::after,.theme:hover::after{opacity:1}
 /* Шапка — матовое стекло (glassmorphism) */
-.top{background:linear-gradient(180deg,#ffffff8c,#ffffff40);-webkit-backdrop-filter:blur(calc(22 * var(--h))) saturate(1.8);backdrop-filter:blur(calc(22 * var(--h))) saturate(1.8);border-bottom:1px solid #ffffffb3;box-shadow:inset 0 -1px 0 #0000000f,0 calc(10 * var(--h)) calc(30 * var(--h)) #0000001a;transition:background .35s,border-color .35s,box-shadow .35s}
-html[data-theme=dark] .top{background:linear-gradient(180deg,#14141a99,#14141a4d);border-bottom-color:#ffffff24;box-shadow:inset 0 -1px 0 #00000066,0 calc(10 * var(--h)) calc(30 * var(--h)) #00000059}
+.top{background:linear-gradient(180deg,#ffffff59,#ffffff1f);-webkit-backdrop-filter:blur(calc(16 * var(--h))) saturate(1.8);backdrop-filter:blur(calc(16 * var(--h))) saturate(1.8);border-bottom:1px solid #ffffffb3;box-shadow:inset 0 -1px 0 #0000000f,0 calc(10 * var(--h)) calc(30 * var(--h)) #0000001a;transition:background .35s,border-color .35s,box-shadow .35s}
+html[data-theme=dark] .top{background:linear-gradient(180deg,#14141a66,#14141a2e);border-bottom-color:#ffffff24;box-shadow:inset 0 -1px 0 #00000066,0 calc(10 * var(--h)) calc(30 * var(--h)) #00000059}
 @media(prefers-reduced-motion:reduce){.ticker ul,.cta::before{animation:none}.cta{transform:translateX(-50%)!important}}
