@@ -68,17 +68,32 @@
     const all = [{id:null, name:'Все сервисы', count:list.reduce((n, g) => n + g.items.length, 0)}, ...list.map(g => ({id:g.id, name:g.name, count:g.items.length}))];
     $('#cats').innerHTML = all.map(c => `<button type="button" class="cat${S.filter === c.id ? ' on' : ''}" data-cat="${c.id ?? ''}"><span>${e(c.name)}</span><small>${c.count || ''}</small></button>`).join('');
   }
+  const go = '<span class="card-go" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></span>';
+  const art = name => COVERS[slug(name)] ? `<img class="cover" src="/storefront/cover-${slug(name)}.webp?v=${COVERS[slug(name)]}" alt="" loading="lazy" decoding="async">` : tile(name);
   function renderGrid() {
     const list = groups(); renderCats(list);
     const q = S.query.trim().toLowerCase();
-    const shown = list.filter(g => (S.filter === null || g.id === S.filter) && (!q || g.name.toLowerCase().includes(q) || g.items.some(p => p.name.toLowerCase().includes(q))));
-    $('#grid-title').textContent = S.filter === null ? 'Все сервисы' : (list.find(g => g.id === S.filter)?.name || 'Каталог');
-    $('#grid').innerHTML = shown.length ? shown.map(g => `<button type="button" class="card${g.items.length ? '' : ' soon'}" data-group="${g.id}">
-        ${g.badge ? `<span class="badge">${g.badge}</span>` : ''}${COVERS[slug(g.name)] ? `<img class="cover" src="/storefront/cover-${slug(g.name)}.webp?v=${COVERS[slug(g.name)]}" alt="" loading="lazy" decoding="async">` : tile(g.name)}
-        <span class="card-info"><span class="card-name">${e(g.name)}</span><span class="card-price">${g.items.length ? (g.stock ? 'от ' + usd(g.min) : 'Нет в наличии') : 'Скоро'}</span></span>
-        <span class="card-go" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></span></button>`).join('')
-      : '<p class="empty">Ничего не найдено.</p>';
+    const g = S.filter === null ? null : list.find(x => x.id === S.filter);
+    if (S.filter !== null && !g) S.filter = null;
+    $('#grid-title').textContent = g ? g.name : 'Все сервисы';
+    $('#grid-back').hidden = !g; $('.main-head').classList.toggle('has-back', !!g);
+    let html;
+    if (!g) {
+      const shown = list.filter(x => !q || x.name.toLowerCase().includes(q) || x.items.some(p => p.name.toLowerCase().includes(q)));
+      html = shown.map(x => `<button type="button" class="card${x.items.length ? '' : ' soon'}" data-cat="${x.id}">
+        ${x.badge ? `<span class="badge">${x.badge}</span>` : ''}${art(x.name)}
+        <span class="card-info"><span class="card-name">${e(x.name)}</span><span class="card-price">${x.items.length ? `${x.items.length} ${plural(x.items.length)}${x.stock ? ' · от ' + usd(x.min) : ''}` : 'Скоро'}</span></span>${go}</button>`).join('');
+    } else {
+      const maxSold = Math.max(0, ...S.products.map(p => Number(p.sold) || 0));
+      const shown = g.items.filter(p => !q || p.name.toLowerCase().includes(q));
+      html = shown.map(p => `<button type="button" class="card${p.stock > 0 ? '' : ' soon'}" data-product="${p.id}">
+        ${maxSold > 0 && Number(p.sold) === maxSold ? '<span class="badge">Popular</span>' : p.is_new ? '<span class="badge">New</span>' : ''}${art(g.name)}
+        <span class="card-info"><span class="card-name">${e(p.name)}</span><span class="card-price">${usd(p.price)}${p.stock > 0 ? '' : ' · нет в наличии'}</span></span>${go}</button>`).join('');
+      if (!g.items.length) html = '<p class="empty">Товары этой категории скоро появятся.</p>';
+    }
+    $('#grid').innerHTML = html || '<p class="empty">Ничего не найдено.</p>';
   }
+  const plural = n => n % 10 === 1 && n % 100 !== 11 ? 'товар' : [2,3,4].includes(n % 10) && ![12,13,14].includes(n % 100) ? 'товара' : 'товаров';
   function renderAccount() {
     const btn = $('#login-btn'); if (btn) btn.textContent = S.user ? (S.user.name || 'Профиль') : 'Войти';
     const box = $('#account-box'); if (!box) return;
@@ -88,15 +103,16 @@
   }
 
   // ---------- Сервис и тарифы ----------
-  function showGroup(id) {
-    const g = groups().find(x => String(x.id) === String(id)); if (!g) return;
-    const rows = g.items.length ? g.items.map(p => `<div class="tariff">
-        <div class="t-main"><strong>${e(p.name)}</strong>${p.description ? `<p>${e(p.description)}</p>` : ''}<span class="t-stock">${p.stock > 0 ? 'В наличии: ' + e(p.stock) : 'Нет в наличии'}</span></div>
-        <div class="t-side"><span class="t-price">${usd(p.price)}</span><span class="t-rub">${rub(p.price)}</span>
-          ${p.stock > 0 ? `<div class="qty"><button type="button" data-q="-1" aria-label="Меньше">−</button><output data-qty="${p.id}">1</output><button type="button" data-q="1" aria-label="Больше">+</button></div><div class="t-btns"><button type="button" class="btn-ghost" data-add="${p.id}">В корзину</button><button type="button" class="btn-buy" data-buy="${p.id}">Купить</button></div>` : ''}</div></div>`).join('')
-      : '<p class="empty">Тарифы скоро появятся. Следи за новостями в нашем Telegram.</p>';
-    const art = COVERS[slug(g.name)] ? `<img class="dlg-cover" src="/storefront/cover-${slug(g.name)}.webp?v=${COVERS[slug(g.name)]}" alt="">` : tile(g.name);
-    open(`<div class="dlg-head">${art}<div><span class="kicker">Сервис</span><h3>${e(g.name)}</h3></div></div><div class="tariffs">${rows}</div><p class="dlg-msg"></p>`, true);
+  function showProduct(id) {
+    const p = S.products.find(x => String(x.id) === String(id)); if (!p) return;
+    const cat = S.cats.find(c => c.id === p.category_id)?.name || p.category_name || '';
+    const img = COVERS[slug(cat)] ? `<img class="dlg-cover" src="/storefront/cover-${slug(cat)}.webp?v=${COVERS[slug(cat)]}" alt="">` : tile(cat || p.name);
+    open(`<div class="dlg-head">${img}<div><span class="kicker">${e(cat || 'Товар')}</span><h3>${e(p.name)}</h3></div></div>
+      ${p.description ? `<p class="muted desc">${e(p.description)}</p>` : ''}
+      <div class="bill"><div><span>Цена</span><strong>${usd(p.price)}${rub(p.price) ? ` <small>${rub(p.price)}</small>` : ''}</strong></div><div><span>В наличии</span><strong>${p.stock > 0 ? e(p.stock) + ' шт.' : 'нет'}</strong></div></div>
+      ${p.stock > 0 ? `<div class="buy-row"><div class="qty"><button type="button" data-q="-1" aria-label="Меньше">−</button><output data-qty="${p.id}">1</output><button type="button" data-q="1" aria-label="Больше">+</button></div>
+        <button type="button" class="btn-ghost" data-add="${p.id}">В корзину</button><button type="button" class="btn-buy" data-buy="${p.id}">Купить</button></div>`
+        : '<p class="dlg-msg info">Сейчас нет в наличии. Загляни позже или напиши нам в Telegram.</p>'}<p class="dlg-msg"></p>`);
   }
 
   // ---------- Вход ----------
@@ -159,6 +175,12 @@
       catch (err) { msg(err.status === 401 ? 'Войдите заново.' : err.message); if (err.status === 401) { S.user = null; renderAccount(); } }
     });
   }
+  const ADMIN = 'https://t.me/Ditzzmback';
+  function adminUrl(p) {
+    const who = S.user ? (S.user.email || (S.user.username ? '@' + S.user.username : 'ID ' + S.user.id)) : '';
+    const text = `Здравствуйте! Хочу оплатить заказ №${p.id} на сайте: ${p.name} × ${p.quantity} шт. Сумма: ${p.amount} USD${p.rubles ? ' / ≈ ' + rubF.format(Number(p.rubles)) : ''}.${who ? ' Аккаунт: ' + who + '.' : ''} Подскажите, как оплатить.`;
+    return ADMIN + '?text=' + encodeURIComponent(text);
+  }
   function showPayment(p) {
     const paid = p.status === 'paid', ready = p.status === 'pending' && p.url;
     const canBalance = ready && S.user && Number(S.user.balance) >= Number(p.amount);
@@ -174,8 +196,9 @@
     } else if (ready) {
       body += `<div class="pay-actions"><a class="btn-buy wide" href="${e(p.url)}" target="_blank" rel="noopener noreferrer">Оплатить через Crypto Bot ↗</a>
         ${canBalance ? `<button type="button" class="btn-ghost" data-action="pay-balance">Оплатить с баланса (${usd(S.user.balance)})</button>` : ''}
+        <a class="btn-ghost" href="${e(adminUrl(p))}" target="_blank" rel="noopener noreferrer">Оплатить через администратора ↗</a>
         <button type="button" class="btn-ghost" data-action="check">Я оплатил — проверить</button></div>
-        <p class="muted small">Счёт действует 10 минут. После оплаты товар появится здесь автоматически.</p><p class="dlg-msg"></p>`;
+        <p class="muted small">Счёт Crypto Bot действует 10 минут — после оплаты товар появится здесь автоматически. Оплату через администратора (@Ditzzmback) он подтверждает вручную.</p><p class="dlg-msg"></p>`;
     } else body += '<p class="dlg-msg info">Счёт закрыт или ещё обрабатывается. Проверь его в «Мои покупки».</p>';
     open(body);
     S.payment = p;
@@ -211,7 +234,7 @@
         <div class="cart-side"><div class="qty"><button type="button" data-cq="-1" data-id="${x.id}" aria-label="Меньше">−</button><output>${x.qty}</output><button type="button" data-cq="1" data-id="${x.id}" aria-label="Больше">+</button></div>
         ${x.p.stock > 0 ? `<button type="button" class="btn-buy small-btn" data-cpay="${x.id}">Оплатить</button>` : ''}<button type="button" class="btn-x" data-cdel="${x.id}" aria-label="Удалить">×</button></div></div>`).join('')}</div>
       <div class="bill"><div><span>Итого</span><strong>${usd(total)}${rub(total) ? ` <small>${rub(total)}</small>` : ''}</strong></div></div>
-      <div class="pay-actions">${canAll ? `<button type="button" class="btn-buy wide" data-action="cart-balance">Оплатить всё с баланса (${usd(S.user.balance)})</button>` : `<p class="muted small">${S.user ? 'Каждый товар оплачивается отдельным счётом через Crypto Bot. Чтобы оплатить всё сразу, пополни баланс.' : 'Чтобы оплатить, войди в аккаунт.'}</p>`}</div><p class="dlg-msg"></p>`);
+      <div class="pay-actions">${canAll ? `<button type="button" class="btn-buy wide" data-action="cart-balance">Оплатить всё с баланса (${usd(S.user.balance)})</button>` : `<p class="muted small">${S.user ? 'Каждый товар оплачивается отдельным счётом: Crypto Bot или через администратора. Чтобы оплатить всё сразу, пополни баланс.' : 'Чтобы оплатить, войди в аккаунт.'}</p>`}</div><p class="dlg-msg"></p>`);
   }
   async function cartBalance() {
     const items = cartItems().filter(x => x.p.stock > 0), got = [];
@@ -248,8 +271,9 @@
     if (t === d) { const r = d.getBoundingClientRect(); if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) close(); return; }
     if (t.closest('.dlg-close')) return close();
     if (t.closest('#login-btn')) { ev.preventDefault(); return S.user ? account() : authDialog(); }
-    const cat = t.closest('[data-cat]'); if (cat) { S.filter = cat.dataset.cat === '' ? null : Number(cat.dataset.cat); return renderGrid(); }
-    const card = t.closest('[data-group]'); if (card) return showGroup(card.dataset.group);
+    const cat = t.closest('[data-cat]'); if (cat) { S.filter = cat.dataset.cat === '' ? null : Number(cat.dataset.cat); S.query = ''; const si = $('#cat-search'); if (si) si.value = ''; renderGrid(); $('#grid').scrollTop = 0; return; }
+    if (t.closest('#grid-back')) { S.filter = null; renderGrid(); return; }
+    const card = t.closest('[data-product]'); if (card) return showProduct(card.dataset.product);
     const q = t.closest('[data-q]'); if (q) { const o = q.parentElement.querySelector('output'); const p = S.products.find(x => String(x.id) === o.dataset.qty); o.textContent = String(Math.max(1, Math.min(Number(p?.stock) || 1, 100, Number(o.textContent) + Number(q.dataset.q)))); return; }
     if (t.closest('#cart-btn')) return showCart();
     const add = t.closest('[data-add]'); if (add) { const o = $(`output[data-qty="${add.dataset.add}"]`); cartAdd(Number(add.dataset.add), Number(o?.textContent) || 1); add.textContent = 'Добавлено ✓'; return; }

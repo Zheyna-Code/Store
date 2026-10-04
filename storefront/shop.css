@@ -244,3 +244,10 @@ html:not([data-view=catalog]) .cart,html[data-view=catalog] .tg:not(.cart){displ
 .cats,.grid,.dlg{scrollbar-width:none;-ms-overflow-style:none}
 .cats::-webkit-scrollbar,.grid::-webkit-scrollbar,.dlg::-webkit-scrollbar{display:none}
 @media (max-aspect-ratio:1/1){.cart-row{flex-direction:column;align-items:stretch}.cart-side{justify-content:flex-end}}
+.main-head{display:flex;align-items:center;gap:calc(14 * var(--h))}
+.back{display:inline-flex;align-items:center;gap:calc(8 * var(--h));height:calc(40 * var(--h));padding:0 calc(16 * var(--h)) 0 calc(12 * var(--h));border:0;border-radius:999px;font:inherit;font-size:calc(15 * var(--h));font-weight:700;color:var(--fg);background:var(--soft2);box-shadow:inset 0 0 0 calc(1 * var(--h)) var(--line);cursor:pointer;transition:transform .15s,filter .2s}
+.back:hover{filter:brightness(1.08)}.back:active{transform:scale(.97)}.back[hidden]{display:none}
+.desc{margin:0 0 16px;color:var(--muted);line-height:1.5;white-space:pre-line}
+.buy-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.buy-row .btn-buy,.buy-row .btn-ghost{flex:1}
+.cat-card .card-price{opacity:.85}
+@media (max-aspect-ratio:1/1){.main-head.has-back{display:flex;padding:calc(18 * var(--h)) calc(18 * var(--h)) 0}.main-head.has-back h2{font-size:calc(30 * var(--h))}.main-head.has-back .back{height:calc(64 * var(--h));font-size:calc(24 * var(--h));padding:0 calc(24 * var(--h)) 0 calc(18 * var(--h))}}
