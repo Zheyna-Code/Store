@@ -96,13 +96,13 @@ html[data-theme=dark] .nav a::after{background:#fff;box-shadow:0 0 calc(6 * var(
 .catalog[hidden],.hero[hidden]{display:none}
 .catalog-bg{position:absolute;inset:0;background:url("/storefront/catalog.webp?v=1cb44c33") center/cover no-repeat}
 html[data-theme=dark] .catalog-bg{background-image:url("/storefront/catalog-dark.webp?v=9863c0ae")}
-.panels{position:absolute;top:calc(86 * var(--h) + 30 * var(--h));bottom:calc(56 * var(--h));left:calc(106 * var(--h));right:calc(101 * var(--h));display:flex;gap:calc(28 * var(--h))}
+.panels{position:absolute;top:calc(86 * var(--h) + 60 * var(--h));bottom:calc(56 * var(--h));left:calc(106 * var(--h));right:calc(101 * var(--h));display:flex;gap:calc(44 * var(--h))}
 .panel{border-radius:calc(28 * var(--h));background:linear-gradient(160deg,#ffffff66,#ffffff26);-webkit-backdrop-filter:blur(calc(18 * var(--h))) saturate(1.6);backdrop-filter:blur(calc(18 * var(--h))) saturate(1.6);border:1px solid #ffffffb3;box-shadow:inset 0 1px 0 #ffffffcc,0 calc(20 * var(--h)) calc(50 * var(--h)) #0000001f;transition:background .35s,border-color .35s,box-shadow .35s}
 .panel-side{flex:0 0 26%}
 .panel-main{flex:1 1 auto}
 html[data-theme=dark] .panel{background:linear-gradient(160deg,#ffffff1a,#ffffff08);border-color:#ffffff2e;box-shadow:inset 0 1px 0 #ffffff33,0 calc(20 * var(--h)) calc(50 * var(--h)) #00000080}
 @media (max-aspect-ratio:1/1){.nav{gap:calc(30 * var(--h))}.nav a{font-size:calc(26 * var(--h))}.panels{top:calc(130 * var(--h) + 24 * var(--h));left:calc(24 * var(--h));right:calc(24 * var(--h));bottom:calc(24 * var(--h));flex-direction:column;gap:calc(20 * var(--h))}.panel-side{flex:0 0 22%}}
-@media (max-aspect-ratio:1/1){.top{height:calc(178 * var(--h));flex-wrap:wrap;align-content:center;row-gap:calc(16 * var(--h))}.nav{position:static;transform:none;order:3;width:100%;justify-content:center;gap:calc(60 * var(--h))}.nav a{font-size:calc(30 * var(--h))}.panels{top:calc(178 * var(--h) + 24 * var(--h))}}
+@media (max-aspect-ratio:1/1){.top{height:calc(178 * var(--h));flex-wrap:wrap;align-content:center;row-gap:calc(16 * var(--h))}.nav{position:static;transform:none;order:3;width:100%;justify-content:center;gap:calc(60 * var(--h))}.nav a{font-size:calc(30 * var(--h))}.panels{top:calc(178 * var(--h) + 44 * var(--h))}}
 /* Переход Главная ⇄ Каталог как смена рабочих столов на MacBook */
 @keyframes rise-in-c{from{opacity:0;transform:translateX(-50%) translateY(calc(30 * var(--h)))}}
 @keyframes rise-in{from{opacity:0;transform:translateY(calc(30 * var(--h)))}}
