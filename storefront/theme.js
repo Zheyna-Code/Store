@@ -62,10 +62,10 @@
   });
 })();
 
-// Разделы «Главная» / «Каталог» (переключение по #catalog без перезагрузки, с анимацией).
+// Разделы «Главная» / «Каталог»: переход как смена рабочих столов на MacBook.
 (function () {
-  var timer = null;
-  function views() { return { home: document.getElementById('home'), catalog: document.getElementById('catalog') }; }
+  var timer = null, CLS = ['sp-out-l', 'sp-out-r', 'sp-in-l', 'sp-in-r'];
+  function clean(el) { CLS.forEach(function (c) { el.classList.remove(c); }); }
   function mark(name) {
     document.documentElement.dataset.view = name;
     Array.prototype.forEach.call(document.querySelectorAll('.nav a'), function (a) {
@@ -75,25 +75,20 @@
     });
   }
   function show(animate) {
-    var v = views(); if (!v.home || !v.catalog) return;
+    var home = document.getElementById('home'), catalog = document.getElementById('catalog');
+    if (!home || !catalog) return;
     var name = location.hash === '#catalog' ? 'catalog' : 'home';
-    var to = v[name], from = v[name === 'catalog' ? 'home' : 'catalog'];
+    var to = name === 'catalog' ? catalog : home, from = name === 'catalog' ? home : catalog;
     mark(name);
-    clearTimeout(timer);
+    clearTimeout(timer); clean(home); clean(catalog);
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    function enter() {
-      from.hidden = true; from.classList.remove('view-out');
-      to.hidden = false;
-      if (animate && !reduce) {
-        to.classList.remove('view-in'); void to.offsetWidth; to.classList.add('view-in');
-        timer = setTimeout(function () { to.classList.remove('view-in'); }, 950);
-      }
-    }
-    if (animate && !reduce && !from.hidden) {
-      to.classList.remove('view-in');
-      from.classList.add('view-out');
-      timer = setTimeout(enter, 300);
-    } else enter();
+    if (!animate || reduce || from.hidden) { from.hidden = true; to.hidden = false; return; }
+    var dir = name === 'catalog' ? 'l' : 'r';   // каталог «справа» от главной
+    to.hidden = false;
+    void to.offsetWidth;
+    from.classList.add('sp-out-' + dir);
+    to.classList.add('sp-in-' + dir);
+    timer = setTimeout(function () { from.hidden = true; clean(from); clean(to); }, 1150);
   }
   document.addEventListener('DOMContentLoaded', function () { show(false); });
   window.addEventListener('hashchange', function () { show(true); });
