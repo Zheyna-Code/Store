@@ -1,4 +1,5 @@
 """Public shop, same-origin authenticated API and existing payment service integration."""
+import asyncio
 import base64
 import functools
 import hmac
@@ -14,7 +15,7 @@ from aiohttp import web
 from crypto_pay import money,quantity,PaymentError
 from referrals import referral_link,start_referrer
 from rich_description import description_parts
-from web_auth import WebAuth,validate_init_data
+from web_auth import WebAuth,validate_init_data,normalize_email,check_password,hash_password,verify_password,DUMMY_HASH
 
 SESSION_COOKIE='__Host-nexus_session'
 LOGIN_COOKIE='__Host-nexus_login'
@@ -81,7 +82,7 @@ class ShopSite:
         authorization=request.headers.get('Authorization','')
         token=authorization[7:] if authorization.startswith('Bearer ') else request.cookies.get(SESSION_COOKIE,'')
         session=await self.auth.session(token)
-        if not session:raise web.HTTPUnauthorized(reason='Войдите через Telegram.')
+        if not session:raise web.HTTPUnauthorized(reason='Войдите в аккаунт.')
         if mutating:
             self.origin_check(request)
             if not hmac.compare_digest(request.headers.get('X-CSRF-Token',''),session['csrf']):
@@ -100,7 +101,7 @@ class ShopSite:
         if name in BINARY_ASSETS:
             return web.Response(body=binary_asset(name),content_type=BINARY_ASSETS[name],
                 headers={'Cache-Control':'public, max-age=86400','X-Content-Type-Options':'nosniff'})
-        if name not in {'shop.css','shop.js','theme.js','icon.svg'}:raise web.HTTPNotFound()
+        if name not in {'shop.css','shop.js','theme.js','catalog.js','icon.svg'}:raise web.HTTPNotFound()
         return web.FileResponse(FILES/name,headers={'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'})
 
     @api
@@ -108,13 +109,16 @@ class ShopSite:
         self.limit(('catalog',request.remote),120)
         categories=await self.get_db().active_categories()
         rows=await self.get_db()._pool().fetch("""SELECT p.id,p.name,p.description,p.price,p.category_id,c.name AS category_name,
-            COUNT(s.id) FILTER(WHERE NOT s.is_issued AND (s.reserved_until IS NULL OR s.reserved_until<=NOW())) AS stock_count
+            COUNT(s.id) FILTER(WHERE NOT s.is_issued AND (s.reserved_until IS NULL OR s.reserved_until<=NOW())) AS stock_count,
+            p.created_at>NOW()-INTERVAL '14 days' AS is_new,
+            (SELECT COUNT(*) FROM orders o WHERE o.product_id=p.id AND o.status='paid') AS sold
             FROM products p LEFT JOIN categories c ON c.id=p.category_id LEFT JOIN stock_items s ON s.product_id=p.id
             WHERE p.is_active AND (p.category_id IS NULL OR c.is_active) GROUP BY p.id,c.name ORDER BY p.created_at DESC LIMIT 1000""")
         products=[]
         for r in rows:
             products.append({'id':r['id'],'name':r['name'],'description':''.join(part.get('text',part.get('emoji','')) for part in description_parts(r['description'])),
-                'price':str(r['price']),'category_id':r['category_id'],'category_name':r['category_name'] or 'Другое','stock':r['stock_count']})
+                'price':str(r['price']),'category_id':r['category_id'],'category_name':r['category_name'] or 'Другое','stock':r['stock_count'],
+                'is_new':bool(r['is_new']),'sold':r['sold']})
         return web.json_response({'categories':[{'id':c['id'],'name':c['name']} for c in categories],'products':products,'policies':self.policies})
 
     @api
@@ -153,8 +157,38 @@ class ShopSite:
     async def me(self,request):
         session=await self.user(request);uid=session['customer_id'];customer=await self.get_db().customer(uid)
         stats=await self.get_db().referral_stats(uid)
-        return web.json_response({'id':uid,'name':customer['first_name'],'username':customer['username'],'balance':str(customer['balance']),
-            'referral':{'url':referral_link(uid),'invited':stats['invited'],'earned':stats['earned']},'purchases':stats['purchases'],'csrf':session['csrf']})
+        email=await self.auth.email_of(uid) if uid<0 else None
+        referral={'url':referral_link(uid),'invited':stats['invited'],'earned':stats['earned']} if uid>0 else None
+        return web.json_response({'id':uid,'name':customer['first_name'],'username':customer['username'],'email':email,'balance':str(customer['balance']),
+            'referral':referral,'purchases':stats['purchases'],'csrf':session['csrf']})
+
+    async def scrypt(self,fn,*args):
+        return await asyncio.get_running_loop().run_in_executor(None,fn,*args)
+
+    @api
+    async def register(self,request):
+        self.origin_check(request);self.limit(('register',request.remote),5)
+        data=await self.body(request)
+        email=normalize_email(data.get('email'));password=check_password(data.get('password'))
+        name=data.get('name') if isinstance(data.get('name'),str) else ''
+        name=' '.join(name.split())[:64] or email.split('@')[0][:64]
+        uid=await self.auth.register(email,await self.scrypt(hash_password,password),name)
+        if uid is None:raise web.HTTPConflict(reason='Эта почта уже зарегистрирована. Войдите.')
+        token,csrf=await self.auth.create_session(uid)
+        response=web.json_response({'ok':True,'csrf':csrf});self.set_session(response,token);return response
+
+    @api
+    async def password_login(self,request):
+        self.origin_check(request);self.limit(('login',request.remote),10)
+        data=await self.body(request)
+        email=normalize_email(data.get('email'));password=data.get('password')
+        if not isinstance(password,str) or len(password)>128:raise ValueError
+        self.limit(('login-email',email),10)
+        account=await self.auth.account(email)
+        ok=await self.scrypt(verify_password,password,account['password_hash'] if account else DUMMY_HASH)
+        if not account or not ok:raise web.HTTPUnauthorized(reason='Неверная почта или пароль.')
+        token,csrf=await self.auth.create_session(account['customer_id'])
+        response=web.json_response({'ok':True,'csrf':csrf});self.set_session(response,token);return response
 
     @api
     async def logout(self,request):
@@ -218,7 +252,7 @@ class ShopSite:
         app.router.add_get('/',self.index)
         app.router.add_get('/storefront/{name}',self.asset)
         routes=[('GET','catalog',self.catalog),('GET','rate',self.rate),('POST','auth/telegram',self.mini_login),
-            ('POST','auth/link',self.login_link),('GET','auth/status',self.login_status),('GET','me',self.me),('POST','auth/logout',self.logout),
+            ('POST','auth/link',self.login_link),('POST','auth/register',self.register),('POST','auth/login',self.password_login),('GET','auth/status',self.login_status),('GET','me',self.me),('POST','auth/logout',self.logout),
             ('POST','checkout',self.checkout),('GET','payments/{id}',self.payment),('POST','payments/{id}/check',self.check_payment),
             ('POST','payments/{id}/balance',self.balance_payment),('GET','orders',self.orders)]
         for method,path,handler in routes:app.router.add_route(method,'/api/store/'+path,handler)
