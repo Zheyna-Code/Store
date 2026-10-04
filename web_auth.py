@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from urllib.parse import parse_qsl
@@ -23,7 +24,49 @@ CREATE TABLE IF NOT EXISTS web_logins (
     expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '5 minutes'
 );
 CREATE INDEX IF NOT EXISTS web_logins_expiry_idx ON web_logins(expires_at);
+-- Аккаунты сайта по почте и паролю. Им выдаётся отрицательный customer_id,
+-- чтобы никогда не пересекаться с Telegram ID (они всегда положительные).
+CREATE SEQUENCE IF NOT EXISTS web_account_seq;
+CREATE TABLE IF NOT EXISTS web_accounts (
+    email TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    customer_id BIGINT UNIQUE NOT NULL REFERENCES customers(telegram_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
+
+EMAIL_RE=re.compile(r'^[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}$')
+SCRYPT=dict(n=2**14,r=8,p=1,dklen=32)
+
+
+def normalize_email(value):
+    if not isinstance(value,str): raise ValueError('Введите почту.')
+    email=value.strip().lower()
+    if len(email)>254 or not EMAIL_RE.match(email): raise ValueError('Проверьте адрес почты.')
+    return email
+
+
+def check_password(value):
+    if not isinstance(value,str) or not 8<=len(value)<=128: raise ValueError('Пароль должен быть от 8 до 128 символов.')
+    return value
+
+
+def hash_password(password,salt=None):
+    salt=salt or secrets.token_bytes(16)
+    key=hashlib.scrypt(password.encode(),salt=salt,maxmem=64*1024*1024,**SCRYPT)
+    return f'scrypt${salt.hex()}${key.hex()}'
+
+
+def verify_password(password,stored):
+    try:
+        kind,salt,key=stored.split('$')
+        if kind!='scrypt': return False
+        return hmac.compare_digest(hash_password(password,bytes.fromhex(salt)),stored)
+    except (ValueError,AttributeError):
+        return False
+
+
+DUMMY_HASH=hash_password('dummy-password-for-timing')
 
 
 def digest(token):
@@ -70,6 +113,25 @@ class WebAuth:
         await self.pool.execute('DELETE FROM web_sessions WHERE expires_at<NOW()')
         await self.pool.execute('INSERT INTO web_sessions(token_hash,customer_id,csrf) VALUES($1,$2,$3)',digest(token),uid,csrf)
         return token,csrf
+
+    async def register(self,email,password_hash,name):
+        """Создаёт клиента сайта с почтой. None — если почта уже занята."""
+        async with self.pool.acquire() as c,c.transaction():
+            if await c.fetchval('SELECT 1 FROM web_accounts WHERE email=$1',email): return None
+            uid=-await c.fetchval("SELECT nextval('web_account_seq')")
+            await c.execute('INSERT INTO customers(telegram_id,username,first_name) VALUES($1,NULL,$2)',uid,name)
+            try:
+                await c.execute('INSERT INTO web_accounts(email,password_hash,customer_id) VALUES($1,$2,$3)',email,password_hash,uid)
+            except Exception as exc:
+                if exc.__class__.__name__=='UniqueViolationError': return None
+                raise
+            return uid
+
+    async def account(self,email):
+        return await self.pool.fetchrow('SELECT * FROM web_accounts WHERE email=$1',email)
+
+    async def email_of(self,uid):
+        return await self.pool.fetchval('SELECT email FROM web_accounts WHERE customer_id=$1',uid)
 
     async def create_login(self):
         token=secrets.token_urlsafe(32);login_id=secrets.token_urlsafe(24);code=f'{secrets.randbelow(1000000):06d}'

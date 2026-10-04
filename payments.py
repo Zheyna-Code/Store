@@ -137,6 +137,11 @@ class Payments:
         if not p:
             return False
         success = False
+        if p['customer_id'] is not None and p['customer_id'] < 0:
+            # Аккаунт сайта (почта): Telegram-чата нет, товар показывается на сайте в «Мои покупки».
+            success = True
+            await self.store.delivered(p['id'], p['delivery_claim'], success)
+            return True
         try:
             total = f"{p['amount']:.2f} $"
             if p['outcome'] == 'topup':

@@ -160,6 +160,27 @@ class StoreApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_failures_do_not_expose_tokens_or_stock(self):
         self.db.customer=AsyncMock(side_effect=RuntimeError('SECRET-STOCK/BOT-TOKEN'))
         r,d=await self.request('me');self.assertEqual(r.status,503);self.assertNotIn('SECRET',json.dumps(d))
+    async def test_email_register_login_and_purchase(self):
+        h={'Origin':ORIGIN}
+        r,_=await self.request('auth/register',{'email':'buyer@example.com','password':'password123'},headers={});self.assertEqual(r.status,403)
+        r,_=await self.request('auth/register',{'email':'buyer@example.com','password':'short'},headers=h);self.assertEqual(r.status,400)
+        r,_=await self.request('auth/register',{'email':'not-an-email','password':'password123'},headers=h);self.assertEqual(r.status,400)
+        r,d=await self.request('auth/register',{'email':' Buyer@Example.com ','password':'password123','name':'Buyer'},headers=h);self.assertEqual(r.status,200)
+        cookie=r.cookies[SESSION_COOKIE];self.assertTrue(cookie['httponly']);self.assertTrue(cookie['secure'])
+        r,_=await self.request('auth/register',{'email':'buyer@example.com','password':'password456'},headers=h);self.assertEqual(r.status,409)
+        stored=await self.pool.fetchval('SELECT password_hash FROM web_accounts');self.assertTrue(stored.startswith('scrypt$'));self.assertNotIn('password123',stored)
+        for body in [{'email':'buyer@example.com','password':'wrong-pass'},{'email':'nobody@example.com','password':'password123'}]:
+            r,_=await self.request('auth/login',body,headers=h);self.assertEqual(r.status,401)
+        r,d=await self.request('auth/login',{'email':'BUYER@example.com','password':'password123'},headers=h);self.assertEqual(r.status,200)
+        hh={'Origin':ORIGIN,'Cookie':SESSION_COOKIE+'='+r.cookies[SESSION_COOKIE].value,'X-CSRF-Token':d['csrf']}
+        _,me=await self.request('me',headers=hh)
+        self.assertLess(me['id'],0);self.assertEqual(me['email'],'buyer@example.com');self.assertEqual(me['name'],'Buyer');self.assertIsNone(me['referral'])
+        await self.db.grant_balance_by_id(me['id'],'10','test')
+        _,p=await self.request('checkout',{'purpose':'product','product_id':self.pid,'quantity':1},headers=hh)
+        r,paid=await self.request(f'payments/{p["id"]}/balance',{},headers=hh);self.assertEqual(r.status,200);self.assertEqual(paid['items'],['credential-A'])
+        self.assertTrue(await self.pool.fetchval('SELECT delivered_at IS NOT NULL FROM payments WHERE id=$1',p['id']))
+        _,orders=await self.request('orders',headers=hh);self.assertEqual(orders[0]['items'],['credential-A'])
+        _,other=await self.request('orders');self.assertEqual(other,[])
     async def test_rate_and_login_throttled(self):
         _,d=await self.request('rate',headers={});self.assertIsNone(d['rub_per_usd'])
         for _ in range(15):r,_=await self.request('auth/link',{})
