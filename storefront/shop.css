@@ -230,10 +230,10 @@ button:disabled{opacity:.6;cursor:progress}
 .dlg-cover{width:92px;height:92px;flex:none;border-radius:20px;object-fit:cover;box-shadow:inset 0 0 0 1px #ffffff33,0 10px 24px #00000059}
 .t-btns{display:flex;gap:8px}.t-btns .btn-ghost,.t-btns .btn-buy{height:40px;padding:0 16px;font-size:14px}
 /* Корзина вместо Telegram в каталоге */
-.cart{position:relative;border:0;cursor:pointer;font:inherit}
+.cart{position:relative;overflow:visible;border:0;cursor:pointer;font:inherit}
 .cart svg{width:48%;height:48%;transform:none}
 html:not([data-view=catalog]) .cart,html[data-view=catalog] .tg:not(.cart){display:none}
-.cart-count{position:absolute;top:calc(-4 * var(--h));right:calc(-4 * var(--h));min-width:calc(20 * var(--h));height:calc(20 * var(--h));padding:0 calc(5 * var(--h));border-radius:999px;display:grid;place-items:center;font-size:calc(12 * var(--h));font-weight:800;color:#fff;background:#e5484d;box-shadow:0 0 0 calc(2 * var(--h)) #ffffffcc}
+.cart-count{position:absolute;z-index:2;line-height:1;top:calc(-4 * var(--h));right:calc(-4 * var(--h));min-width:calc(20 * var(--h));height:calc(20 * var(--h));padding:0 calc(5 * var(--h));border-radius:999px;display:grid;place-items:center;font-size:calc(12 * var(--h));font-weight:800;color:#fff;background:#e5484d;box-shadow:0 0 0 calc(2 * var(--h)) #ffffffcc}
 .cart-count[hidden]{display:none}
 .cart-list{display:flex;flex-direction:column;gap:10px;margin:0 0 14px}
 .cart-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px;border-radius:16px;background:var(--soft);box-shadow:inset 0 0 0 1px var(--line)}
