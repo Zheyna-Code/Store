@@ -62,20 +62,39 @@
   });
 })();
 
-// Разделы «Главная» / «Каталог» (переключение по #catalog без перезагрузки).
+// Разделы «Главная» / «Каталог» (переключение по #catalog без перезагрузки, с анимацией).
 (function () {
-  function show() {
-    var cat = location.hash === '#catalog';
-    var home = document.getElementById('home'), catalog = document.getElementById('catalog');
-    if (!home || !catalog) return;
-    home.hidden = cat; catalog.hidden = !cat;
-    document.documentElement.dataset.view = cat ? 'catalog' : 'home';
+  var timer = null;
+  function views() { return { home: document.getElementById('home'), catalog: document.getElementById('catalog') }; }
+  function mark(name) {
+    document.documentElement.dataset.view = name;
     Array.prototype.forEach.call(document.querySelectorAll('.nav a'), function (a) {
-      var on = a.dataset.view === (cat ? 'catalog' : 'home');
+      var on = a.dataset.view === name;
       a.classList.toggle('active', on);
       if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
   }
-  document.addEventListener('DOMContentLoaded', show);
-  window.addEventListener('hashchange', show);
+  function show(animate) {
+    var v = views(); if (!v.home || !v.catalog) return;
+    var name = location.hash === '#catalog' ? 'catalog' : 'home';
+    var to = v[name], from = v[name === 'catalog' ? 'home' : 'catalog'];
+    mark(name);
+    clearTimeout(timer);
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function enter() {
+      from.hidden = true; from.classList.remove('view-out');
+      to.hidden = false;
+      if (animate && !reduce) {
+        to.classList.remove('view-in'); void to.offsetWidth; to.classList.add('view-in');
+        timer = setTimeout(function () { to.classList.remove('view-in'); }, 950);
+      }
+    }
+    if (animate && !reduce && !from.hidden) {
+      to.classList.remove('view-in');
+      from.classList.add('view-out');
+      timer = setTimeout(enter, 300);
+    } else enter();
+  }
+  document.addEventListener('DOMContentLoaded', function () { show(false); });
+  window.addEventListener('hashchange', function () { show(true); });
 })();
