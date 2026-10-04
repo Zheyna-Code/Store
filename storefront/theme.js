@@ -61,3 +61,21 @@
     });
   });
 })();
+
+// Разделы «Главная» / «Каталог» (переключение по #catalog без перезагрузки).
+(function () {
+  function show() {
+    var cat = location.hash === '#catalog';
+    var home = document.getElementById('home'), catalog = document.getElementById('catalog');
+    if (!home || !catalog) return;
+    home.hidden = cat; catalog.hidden = !cat;
+    document.documentElement.dataset.view = cat ? 'catalog' : 'home';
+    Array.prototype.forEach.call(document.querySelectorAll('.nav a'), function (a) {
+      var on = a.dataset.view === (cat ? 'catalog' : 'home');
+      a.classList.toggle('active', on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+  }
+  document.addEventListener('DOMContentLoaded', show);
+  window.addEventListener('hashchange', show);
+})();

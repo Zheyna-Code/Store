@@ -22,7 +22,7 @@ FILES=Path(__file__).resolve().parent/'storefront'
 CSP="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
 
 # Картинки и шрифт хранятся в репозитории как base64 (*.b64) и отдаются в бинарном виде.
-BINARY_ASSETS={'hero.webp':'image/webp','hero-dark.webp':'image/webp','manrope.woff2':'font/woff2'}
+BINARY_ASSETS={'hero.webp':'image/webp','hero-dark.webp':'image/webp','catalog.webp':'image/webp','catalog-dark.webp':'image/webp','manrope.woff2':'font/woff2'}
 
 
 @functools.lru_cache(maxsize=None)
