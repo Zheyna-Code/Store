@@ -8,7 +8,8 @@
   const usd = x => Number.isFinite(Number(x)) ? usdF.format(Number(x)) : '—';
   const S = {user:null, csrf:'', cats:[], products:[], rate:null, filter:null, query:'', timers:[], loaded:false};
   const DARK_TILES = new Set(['chatgpt','grok','notion','netflix','capcut','spotify']);
-  const BOT = 'https://t.me/wanderersshop_bot';
+  const COVERS = {"chatgpt": "c96ea251", "claude": "c3b0326c", "gemini": "375082a0", "grok": "57166daf", "notion": "039baa03", "perplexity": "ed4b4ab6", "duolingo": "94b9d71b", "capcut": "5bd53255", "netflix": "33256db0", "spotify": "1cb9d96e"};
+  const CART_KEY = 'nexus-cart';
 
   async function api(path, method = 'GET', body) {
     const headers = {};
@@ -73,7 +74,7 @@
     const shown = list.filter(g => (S.filter === null || g.id === S.filter) && (!q || g.name.toLowerCase().includes(q) || g.items.some(p => p.name.toLowerCase().includes(q))));
     $('#grid-title').textContent = S.filter === null ? 'Все сервисы' : (list.find(g => g.id === S.filter)?.name || 'Каталог');
     $('#grid').innerHTML = shown.length ? shown.map(g => `<button type="button" class="card${g.items.length ? '' : ' soon'}" data-group="${g.id}">
-        ${g.badge ? `<span class="badge">${g.badge}</span>` : ''}${tile(g.name)}
+        ${g.badge ? `<span class="badge">${g.badge}</span>` : ''}${COVERS[slug(g.name)] ? `<img class="cover" src="/storefront/cover-${slug(g.name)}.webp?v=${COVERS[slug(g.name)]}" alt="" loading="lazy" decoding="async">` : tile(g.name)}
         <span class="card-info"><span class="card-name">${e(g.name)}</span><span class="card-price">${g.items.length ? (g.stock ? 'от ' + usd(g.min) : 'Нет в наличии') : 'Скоро'}</span></span>
         <span class="card-go" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></span></button>`).join('')
       : '<p class="empty">Ничего не найдено.</p>';
@@ -92,9 +93,10 @@
     const rows = g.items.length ? g.items.map(p => `<div class="tariff">
         <div class="t-main"><strong>${e(p.name)}</strong>${p.description ? `<p>${e(p.description)}</p>` : ''}<span class="t-stock">${p.stock > 0 ? 'В наличии: ' + e(p.stock) : 'Нет в наличии'}</span></div>
         <div class="t-side"><span class="t-price">${usd(p.price)}</span><span class="t-rub">${rub(p.price)}</span>
-          ${p.stock > 0 ? `<div class="qty"><button type="button" data-q="-1" aria-label="Меньше">−</button><output data-qty="${p.id}">1</output><button type="button" data-q="1" aria-label="Больше">+</button></div><button type="button" class="btn-buy" data-buy="${p.id}">Купить</button>` : ''}</div></div>`).join('')
+          ${p.stock > 0 ? `<div class="qty"><button type="button" data-q="-1" aria-label="Меньше">−</button><output data-qty="${p.id}">1</output><button type="button" data-q="1" aria-label="Больше">+</button></div><div class="t-btns"><button type="button" class="btn-ghost" data-add="${p.id}">В корзину</button><button type="button" class="btn-buy" data-buy="${p.id}">Купить</button></div>` : ''}</div></div>`).join('')
       : '<p class="empty">Тарифы скоро появятся. Следи за новостями в нашем Telegram.</p>';
-    open(`<div class="dlg-head">${tile(g.name)}<div><span class="kicker">Сервис</span><h3>${e(g.name)}</h3></div></div><div class="tariffs">${rows}</div><p class="dlg-msg"></p>`, true);
+    const art = COVERS[slug(g.name)] ? `<img class="dlg-cover" src="/storefront/cover-${slug(g.name)}.webp?v=${COVERS[slug(g.name)]}" alt="">` : tile(g.name);
+    open(`<div class="dlg-head">${art}<div><span class="kicker">Сервис</span><h3>${e(g.name)}</h3></div></div><div class="tariffs">${rows}</div><p class="dlg-msg"></p>`, true);
   }
 
   // ---------- Вход ----------
@@ -149,7 +151,8 @@
   function requireAuth(then) { if (S.user) return then(); authDialog('login', then); }
 
   // ---------- Оплата ----------
-  async function buy(pid, qty) {
+  async function buy(pid, qty, fromCart = false) {
+    S.cartPid = fromCart ? pid : null;
     requireAuth(async () => {
       open('<p class="muted">Создаём счёт…</p><p class="dlg-msg"></p>');
       try { showPayment(await api('checkout', 'POST', {purpose:'product', product_id:pid, quantity:qty})); }
@@ -185,7 +188,43 @@
       }, 5000));
     }
   }
-  async function afterPaid() { await refreshMe(); try { await loadCatalog(); renderGrid(); } catch {} }
+  async function afterPaid() { if (S.cartPid) { cartSave(cartLoad().filter(x => x.id !== S.cartPid)); S.cartPid = null; } await refreshMe(); try { await loadCatalog(); renderGrid(); } catch {} }
+
+  // ---------- Корзина ----------
+  function cartLoad() { try { const c = JSON.parse(localStorage.getItem(CART_KEY) || '[]'); return Array.isArray(c) ? c.filter(x => Number.isInteger(x.id) && x.qty > 0) : []; } catch { return []; } }
+  function cartSave(c) { try { localStorage.setItem(CART_KEY, JSON.stringify(c)); } catch {} cartBadge(); }
+  function cartBadge() { const n = cartLoad().reduce((a, x) => a + x.qty, 0), el = $('#cart-count'); if (el) { el.textContent = String(n); el.hidden = !n; } }
+  function cartAdd(id, qty) {
+    const c = cartLoad(), p = S.products.find(x => x.id === id), cur = c.find(x => x.id === id);
+    const max = Math.min(Number(p?.stock) || 1, 100);
+    if (cur) cur.qty = Math.min(max, cur.qty + qty); else c.push({id, qty:Math.min(max, qty)});
+    cartSave(c);
+  }
+  function cartItems() { return cartLoad().map(x => ({...x, p:S.products.find(p => p.id === x.id)})).filter(x => x.p); }
+  function showCart() {
+    const items = cartItems();
+    if (!items.length) return open('<span class="kicker">Корзина</span><h3>Корзина пуста</h3><p class="muted">Открой сервис в каталоге и нажми «В корзину».</p><p class="dlg-msg"></p>');
+    const total = items.reduce((a, x) => a + Number(x.p.price) * x.qty, 0);
+    const canAll = S.user && Number(S.user.balance) >= total;
+    open(`<span class="kicker">Корзина</span><h3>Твой заказ</h3><div class="cart-list">${items.map(x => `<div class="cart-row">
+        <div class="t-main"><strong>${e(x.p.name)}</strong><span class="t-stock">${usd(x.p.price)} × ${x.qty}${x.p.stock > 0 ? '' : ' · нет в наличии'}</span></div>
+        <div class="cart-side"><div class="qty"><button type="button" data-cq="-1" data-id="${x.id}" aria-label="Меньше">−</button><output>${x.qty}</output><button type="button" data-cq="1" data-id="${x.id}" aria-label="Больше">+</button></div>
+        ${x.p.stock > 0 ? `<button type="button" class="btn-buy small-btn" data-cpay="${x.id}">Оплатить</button>` : ''}<button type="button" class="btn-x" data-cdel="${x.id}" aria-label="Удалить">×</button></div></div>`).join('')}</div>
+      <div class="bill"><div><span>Итого</span><strong>${usd(total)}${rub(total) ? ` <small>${rub(total)}</small>` : ''}</strong></div></div>
+      <div class="pay-actions">${canAll ? `<button type="button" class="btn-buy wide" data-action="cart-balance">Оплатить всё с баланса (${usd(S.user.balance)})</button>` : `<p class="muted small">${S.user ? 'Каждый товар оплачивается отдельным счётом через Crypto Bot. Чтобы оплатить всё сразу, пополни баланс.' : 'Чтобы оплатить, войди в аккаунт.'}</p>`}</div><p class="dlg-msg"></p>`);
+  }
+  async function cartBalance() {
+    const items = cartItems().filter(x => x.p.stock > 0), got = [];
+    for (const x of items) {
+      const p = await api('checkout', 'POST', {purpose:'product', product_id:x.id, quantity:x.qty});
+      const paid = await api(`payments/${p.id}/balance`, 'POST', {});
+      got.push(paid); cartSave(cartLoad().filter(c => c.id !== x.id));
+    }
+    await afterPaid();
+    S.payment = {items: got.flatMap(p => p.items || [])};
+    let i = 0;
+    open(`<span class="kicker">Корзина</span><h3>Оплата получена</h3><p class="dlg-msg ok">Готово! Товары ниже и в «Мои покупки».</p>${got.map(p => `<p class="muted"><strong>${e(p.name)}</strong> × ${e(p.quantity)}</p>${(p.items || []).map(it => `<div class="item"><pre>${e(it)}</pre><button type="button" class="btn-copy" data-copy="${i++}">Скопировать</button></div>`).join('')}`).join('')}`);
+  }
 
   // ---------- Профиль и покупки ----------
   async function account() {
@@ -212,12 +251,18 @@
     const cat = t.closest('[data-cat]'); if (cat) { S.filter = cat.dataset.cat === '' ? null : Number(cat.dataset.cat); return renderGrid(); }
     const card = t.closest('[data-group]'); if (card) return showGroup(card.dataset.group);
     const q = t.closest('[data-q]'); if (q) { const o = q.parentElement.querySelector('output'); const p = S.products.find(x => String(x.id) === o.dataset.qty); o.textContent = String(Math.max(1, Math.min(Number(p?.stock) || 1, 100, Number(o.textContent) + Number(q.dataset.q)))); return; }
+    if (t.closest('#cart-btn')) return showCart();
+    const add = t.closest('[data-add]'); if (add) { const o = $(`output[data-qty="${add.dataset.add}"]`); cartAdd(Number(add.dataset.add), Number(o?.textContent) || 1); add.textContent = 'Добавлено ✓'; return; }
+    const cq = t.closest('[data-cq]'); if (cq) { const c = cartLoad(), it = c.find(x => x.id === Number(cq.dataset.id)), p = S.products.find(x => x.id === it?.id); if (it) { it.qty = Math.max(1, Math.min(Number(p?.stock) || 1, 100, it.qty + Number(cq.dataset.cq))); cartSave(c); } return showCart(); }
+    const cdel = t.closest('[data-cdel]'); if (cdel) { cartSave(cartLoad().filter(x => x.id !== Number(cdel.dataset.cdel))); return showCart(); }
+    const cpay = t.closest('[data-cpay]'); if (cpay) { const id = Number(cpay.dataset.cpay), it = cartLoad().find(x => x.id === id); return buy(id, it?.qty || 1, true); }
     const b = t.closest('[data-buy]'); if (b) { const o = $(`output[data-qty="${b.dataset.buy}"]`); return buy(Number(b.dataset.buy), Number(o?.textContent) || 1); }
     const mode = t.closest('[data-mode]'); if (mode && mode.tagName === 'BUTTON') return authDialog(mode.dataset.mode);
     const copy = t.closest('[data-copy]'); if (copy && S.payment) { navigator.clipboard?.writeText(S.payment.items[Number(copy.dataset.copy)]).then(() => { copy.textContent = 'Скопировано'; }); return; }
     const ord = t.closest('[data-order]'); if (ord) return busy(ord, async () => showPayment(await api('payments/' + ord.dataset.order)));
     const a = t.closest('[data-action]'); if (!a) return;
     const act = a.dataset.action;
+    if (act === 'cart-balance') return busy(a, cartBalance);
     if (act === 'auth') return authDialog();
     if (act === 'account') return account();
     if (act === 'tg-login') return busy(a, telegramLogin);
@@ -230,8 +275,8 @@
   document.addEventListener('input', ev => { if (ev.target.id === 'cat-search') { S.query = ev.target.value; renderGrid(); } });
   document.addEventListener('DOMContentLoaded', async () => {
     dlg()?.addEventListener('close', stopTimers);
-    renderAccount(); refreshMe();
-    try { await loadCatalog(); renderGrid(); }
+    renderAccount(); refreshMe(); cartBadge();
+    try { await loadCatalog(); renderGrid(); cartSave(cartLoad().filter(x => S.products.some(p => p.id === x.id))); }
     catch (err) { $('#grid').innerHTML = `<p class="empty">${e(err.message)}</p>`; }
   });
 })();

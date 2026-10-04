@@ -70,7 +70,7 @@ class StoreApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_index_and_assets_security(self):
         r=await self.client.get('/');self.assertEqual(r.status,200)
         html=await r.text();self.assertIn('Nexus Store',html);self.assertNotIn('/store-media/',html);self.assertNotIn('brand-covers',html);self.assertIn('frame-ancestors',r.headers['Content-Security-Policy'])
-        for path in ['/storefront/shop.js','/storefront/shop.css','/storefront/icon.svg','/storefront/hero.webp','/storefront/hero-dark.webp','/storefront/catalog.webp','/storefront/catalog-dark.webp','/storefront/theme.js','/storefront/manrope.woff2']:
+        for path in ['/storefront/shop.js','/storefront/shop.css','/storefront/icon.svg','/storefront/hero.webp','/storefront/hero-dark.webp','/storefront/catalog.webp','/storefront/catalog-dark.webp','/storefront/cover-chatgpt.webp','/storefront/cover-spotify.webp','/storefront/catalog.js','/storefront/theme.js','/storefront/manrope.woff2']:
             r=await self.client.get(path);self.assertEqual(r.status,200)
         self.assertEqual((await self.client.get('/storefront/bot.py')).status,404)
         self.assertEqual((await self.client.get('/store-media/../bot.py')).status,404)
